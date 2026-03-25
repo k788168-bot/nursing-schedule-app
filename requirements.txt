@@ -1,0 +1,6 @@
+streamlit
+pandas
+openpyxl
+requests
+urllib3
+xlsxwriter
