@@ -751,9 +751,12 @@ if st.session_state.step >= 2:
                 _cap_total += _ctgt
                 _is_exempt = _ci in _scan_night_exempt
                 _is_admin  = _ctitle in ADMIN_TITLES
+                _cn = str(_cr.get("夜班資格", "")).strip() or "大夜"  # 空白預設同大夜
+                _can_en  = _cn in ("大夜", "小夜")           # 可排 E/N
+                _can_128 = _cn in ("大夜", "小夜", "中班")   # 可排 12-8
                 if not _is_exempt and not _is_admin:
-                    _cap_en  += _ctgt
-                    _cap_128 += _ctgt
+                    if _can_en:  _cap_en  += _ctgt
+                    if _can_128: _cap_128 += _ctgt
                 elif _is_exempt and not _is_admin:   # 母性保護：可排 12-8 但不排 E/N
                     _cap_128 += _ctgt
 
