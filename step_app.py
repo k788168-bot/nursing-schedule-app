@@ -1261,18 +1261,41 @@ if st.session_state.step >= 3:
                                             1 for d in range(1, month_days+1)
                                             if d != d_int and sched[a_idx][d] == b_pref_s
                                         )
-                                        # a 的自身下限
                                         _, a_min, _ = _pack_min_info(a_idx, ai_df.loc[a_idx])
-                                        if a_after < a_min: continue  # 讓出後 a 跌破下限
 
-                                        # 暫時讓出 a 的此班
-                                        sched[a_idx][d_int] = ""
-                                        if can_work_base(b_idx, b_pref_s, d_int):
-                                            sched[b_idx][d_int] = b_pref_s  # 交換成功
-                                            _made_progress = True
-                                            break
+                                        # ── 情況 1：a 讓出後仍 ≥ 下限（直接讓渡）──
+                                        if a_after >= a_min:
+                                            sched[a_idx][d_int] = ""
+                                            if can_work_base(b_idx, b_pref_s, d_int):
+                                                sched[b_idx][d_int] = b_pref_s
+                                                _made_progress = True
+                                                break
+                                            else:
+                                                sched[a_idx][d_int] = b_pref_s  # 復原
+
+                                        # ── 情況 2：a 讓出後會跌破下限 → 嘗試「日期對調」──
+                                        # a 讓出 d_int 給 b，同時 a 去搶 b 沒排到的某天 d2
                                         else:
-                                            sched[a_idx][d_int] = b_pref_s  # 復原
+                                            sched[a_idx][d_int] = ""
+                                            if not can_work_base(b_idx, b_pref_s, d_int):
+                                                sched[a_idx][d_int] = b_pref_s  # b 無法接，復原
+                                                continue
+                                            # b 可接此日；找 a 能補的替代日 d2
+                                            _swapped = False
+                                            for d2 in range(1, month_days + 1):
+                                                if d2 == d_int: continue
+                                                if sched[a_idx][d2] not in ["", "上課"]: continue
+                                                if not en_quota_full3(b_pref_s, d2): continue  # d2 配額未滿，a 直接排即可（不需對調）
+                                                if can_work_base(a_idx, b_pref_s, d2):
+                                                    sched[b_idx][d_int] = b_pref_s
+                                                    sched[a_idx][d2]    = b_pref_s
+                                                    _made_progress = True
+                                                    _swapped = True
+                                                    break
+                                            if not _swapped:
+                                                sched[a_idx][d_int] = b_pref_s  # 復原
+                                            if _swapped:
+                                                break
 
                             if not _made_progress: break  # 本輪無任何進展，停止
 
@@ -1322,7 +1345,7 @@ if st.session_state.step >= 3:
         # ── 包班下限警示 ──────────────────────────────────────────────────
         _pw = st.session_state.get("pack_warnings", [])
         if _pw:
-            st.error(f"⚠️ 以下 {len(_pw)} 位包班人員在遵守人力配額及勞基法規定下，**無法達到包班 15 班下限**，請調整配額或手動補排：")
+            st.error(f"⚠️ 以下 {len(_pw)} 位包班人員在遵守人力配額及勞基法規定下，**無法達到包班 15 班下限**（系統已執行讓渡均衡，仍屬結構性限制）。請調整 E/N 班每日配額上限，或至第 7 步手動補排：")
             _pw_df = pd.DataFrame(_pw)
             st.dataframe(_pw_df, use_container_width=False, hide_index=True)
         else:
