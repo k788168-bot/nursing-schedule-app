@@ -1299,9 +1299,15 @@ if st.session_state.step >= 3:
 
                             if not _made_progress: break  # 本輪無任何進展，停止
 
-                        # ── 第五階段：E/N包班護士白班（D班）補班 ─────────────────────
-                        # 讓渡均衡後仍不足 15 班者，允許以白班補足差距
-                        # 優先順序：包班班次（中班/大夜）→ 讓渡均衡 → 白班補班（最後手段）
+                        # ── 第五階段：E/N包班護士補充班次（讓渡均衡後仍不足時的最後手段）─────
+                        # E班包班 → 補充 12-8 班；N班包班 → 補充 D班（白班）
+                        # 此步驟在包班班次排入、讓渡均衡完成後執行，再接常規夜班排班
+                        def _supp_count(row_sched, ss):
+                            """計算補充班次數（D班含所有D開頭變體）"""
+                            if ss == "D":
+                                return sum(1 for v in row_sched if isinstance(v, str) and v.startswith("D"))
+                            return sum(1 for v in row_sched if v == ss)
+
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
                             if pref == "": continue
@@ -1314,19 +1320,20 @@ if st.session_state.step >= 3:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
 
-                            for d_int in range(1, month_days + 1):
-                                # 計算目前實際工作班數（包班班次 + 已補的白班）
-                                total_now = sum(
-                                    1 for v in sched[idx]
-                                    if v == pref_s or v == "D" or v.startswith("D")
-                                )
-                                if total_now >= min_pack: break
-                                if sched[idx][d_int] not in ["", "上課"]: continue
-                                if can_work_base(idx, "D", d_int):
-                                    sched[idx][d_int] = "D"
+                            # E班包班不足 → 補12-8；N班包班不足 → 補D班
+                            supp_s = "12-8" if pref_s == "E" else "D"
 
-                        # ── 包班下限檢查：收集未達 15 班的警示 ──
-                        # 實際排入班數 = 包班班次 + 補排的白班（D班）合計
+                            for d_int in range(1, month_days + 1):
+                                # 包班班次 + 已補的補充班次合計
+                                pack_now = sum(1 for v in sched[idx] if v == pref_s)
+                                supp_now = _supp_count(sched[idx], supp_s)
+                                if pack_now + supp_now >= min_pack: break
+                                if sched[idx][d_int] not in ["", "上課"]: continue
+                                if can_work_base(idx, supp_s, d_int):
+                                    sched[idx][d_int] = supp_s
+
+                        # ── 包班下限檢查：警示以包班班別（pref_s）班數為準 ──
+                        # 補充班次（12-8 / D班）不計入警示判斷，但顯示於表格供參考
                         _pack_warnings3 = []
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
@@ -1337,20 +1344,17 @@ if st.session_state.step >= 3:
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
-                            # E/N包班：計算包班班次 + 白班補班合計
-                            if pref_s in ("E", "N"):
-                                actual_pack = sum(
-                                    1 for v in sched[idx]
-                                    if v == pref_s or v == "D" or v.startswith("D")
-                                )
-                            else:
-                                actual_pack = sum(1 for v in sched[idx] if v == pref_s)
+                            actual_pack = sum(1 for v in sched[idx] if v == pref_s)
                             if actual_pack < min_pack:
+                                supp_s = "12-8" if pref_s == "E" else ("D" if pref_s == "N" else "")
+                                supp_count = _supp_count(sched[idx], supp_s) if supp_s else 0
                                 _pack_warnings3.append({
                                     "姓名": row["姓名"],
                                     "包班班別": pref_s,
                                     "應達下限": min_pack,
-                                    "實際排入": actual_pack,
+                                    f"{pref_s}班實排": actual_pack,
+                                    "補充班次": f"{supp_s}×{supp_count}" if supp_count > 0 else "—",
+                                    "合計": actual_pack + supp_count,
                                     "差距": min_pack - actual_pack,
                                 })
                         st.session_state.pack_warnings = _pack_warnings3
