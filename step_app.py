@@ -1299,7 +1299,34 @@ if st.session_state.step >= 3:
 
                             if not _made_progress: break  # 本輪無任何進展，停止
 
+                        # ── 第五階段：E/N包班護士白班（D班）補班 ─────────────────────
+                        # 讓渡均衡後仍不足 15 班者，允許以白班補足差距
+                        # 優先順序：包班班次（中班/大夜）→ 讓渡均衡 → 白班補班（最後手段）
+                        for idx, row in ai_df.iterrows():
+                            pref = cache_pref[idx]
+                            if pref == "": continue
+                            pref_s = get_pref_s(pref)
+                            if pref_s not in ("E", "N"): continue  # 僅適用 E/N 包班護士
+
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
+                            max_target = month_days - st.session_state.target_off - extra_leaves
+                            if st.session_state.custom_targets and idx in st.session_state.custom_targets:
+                                max_target = st.session_state.custom_targets[idx]
+                            min_pack = min(PACK_MIN_SHIFTS, max_target)
+
+                            for d_int in range(1, month_days + 1):
+                                # 計算目前實際工作班數（包班班次 + 已補的白班）
+                                total_now = sum(
+                                    1 for v in sched[idx]
+                                    if v == pref_s or v == "D" or v.startswith("D")
+                                )
+                                if total_now >= min_pack: break
+                                if sched[idx][d_int] not in ["", "上課"]: continue
+                                if can_work_base(idx, "D", d_int):
+                                    sched[idx][d_int] = "D"
+
                         # ── 包班下限檢查：收集未達 15 班的警示 ──
+                        # 實際排入班數 = 包班班次 + 補排的白班（D班）合計
                         _pack_warnings3 = []
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
@@ -1310,7 +1337,14 @@ if st.session_state.step >= 3:
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
-                            actual_pack = sum(1 for v in sched[idx] if v == pref_s)
+                            # E/N包班：計算包班班次 + 白班補班合計
+                            if pref_s in ("E", "N"):
+                                actual_pack = sum(
+                                    1 for v in sched[idx]
+                                    if v == pref_s or v == "D" or v.startswith("D")
+                                )
+                            else:
+                                actual_pack = sum(1 for v in sched[idx] if v == pref_s)
                             if actual_pack < min_pack:
                                 _pack_warnings3.append({
                                     "姓名": row["姓名"],
@@ -1345,7 +1379,7 @@ if st.session_state.step >= 3:
         # ── 包班下限警示 ──────────────────────────────────────────────────
         _pw = st.session_state.get("pack_warnings", [])
         if _pw:
-            st.error(f"⚠️ 以下 {len(_pw)} 位包班人員在遵守人力配額及勞基法規定下，**無法達到包班 15 班下限**（系統已執行讓渡均衡，仍屬結構性限制）。請調整 E/N 班每日配額上限，或至第 7 步手動補排：")
+            st.error(f"⚠️ 以下 {len(_pw)} 位包班人員在遵守人力配額及勞基法規定下，**無法達到包班 15 班下限**（系統已執行讓渡均衡及白班補班，仍屬結構性限制）。請調整 E/N 班每日配額上限，或至第 7 步手動補排：")
             _pw_df = pd.DataFrame(_pw)
             st.dataframe(_pw_df, use_container_width=False, hide_index=True)
         else:
