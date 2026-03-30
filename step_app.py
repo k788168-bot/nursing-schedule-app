@@ -1209,6 +1209,73 @@ if st.session_state.step >= 3:
                                 if can_work_base(idx, pref_s, d_int):
                                     sched[idx][d_int] = pref_s
 
+                        # ── 第四階段：包班天數讓渡均衡 ─────────────────────────
+                        # 若仍有人未達 15 班下限，嘗試從同組班次較多的人員讓渡可交換的日期
+                        def _pack_min_info(idx, row):
+                            """回傳 (pref_s, min_pack, cur_count)"""
+                            pref  = cache_pref[idx]
+                            if pref == "": return None
+                            ps    = get_pref_s(pref)
+                            el    = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
+                            mt    = month_days - st.session_state.target_off - el
+                            if st.session_state.custom_targets and idx in st.session_state.custom_targets:
+                                mt = st.session_state.custom_targets[idx]
+                            mp    = min(PACK_MIN_SHIFTS, mt)
+                            cur   = sum(1 for v in sched[idx] if v == ps)
+                            return ps, mp, cur
+
+                        # 收集仍不足者（可能多輪才能補足，最多迭代 5 輪）
+                        for _rebal_round in range(5):
+                            _under = [
+                                (idx, *_pack_min_info(idx, ai_df.loc[idx])[:2])
+                                for idx in ai_df.index
+                                if cache_pref[idx] != ""
+                                and _pack_min_info(idx, ai_df.loc[idx])[2] < _pack_min_info(idx, ai_df.loc[idx])[1]
+                            ]
+                            if not _under: break  # 全部達標，退出
+
+                            _made_progress = False
+                            for b_idx, b_pref_s, b_min in _under:
+                                for d_int in range(1, month_days + 1):
+                                    if sum(1 for v in sched[b_idx] if v == b_pref_s) >= b_min: break
+                                    if sched[b_idx][d_int] not in ["", "上課"]: continue
+                                    if not can_work_base(b_idx, b_pref_s, d_int): continue
+
+                                    # 若配額未滿，直接補（漏網之魚）
+                                    if not en_quota_full3(b_pref_s, d_int):
+                                        sched[b_idx][d_int] = b_pref_s
+                                        _made_progress = True
+                                        continue
+
+                                    # 配額已滿 → 尋找同組可讓渡者
+                                    _peers = sorted(
+                                        [i for i in pack_indices3
+                                         if get_pref_s(cache_pref[i]) == b_pref_s
+                                         and i != b_idx
+                                         and sched[i][d_int] == b_pref_s],
+                                        key=lambda i: -sum(1 for d in range(1, month_days+1) if sched[i][d] == b_pref_s)
+                                    )
+                                    for a_idx in _peers:
+                                        # a 讓出此班後的班數
+                                        a_after = sum(
+                                            1 for d in range(1, month_days+1)
+                                            if d != d_int and sched[a_idx][d] == b_pref_s
+                                        )
+                                        # a 的自身下限
+                                        _, a_min, _ = _pack_min_info(a_idx, ai_df.loc[a_idx])
+                                        if a_after < a_min: continue  # 讓出後 a 跌破下限
+
+                                        # 暫時讓出 a 的此班
+                                        sched[a_idx][d_int] = ""
+                                        if can_work_base(b_idx, b_pref_s, d_int):
+                                            sched[b_idx][d_int] = b_pref_s  # 交換成功
+                                            _made_progress = True
+                                            break
+                                        else:
+                                            sched[a_idx][d_int] = b_pref_s  # 復原
+
+                            if not _made_progress: break  # 本輪無任何進展，停止
+
                         # ── 包班下限檢查：收集未達 15 班的警示 ──
                         _pack_warnings3 = []
                         for idx, row in ai_df.iterrows():
