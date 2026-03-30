@@ -1119,6 +1119,8 @@ if st.session_state.step >= 3:
                         holiday_days_set3 = set(st.session_state.holiday_list)
                         pref_s_set = set(get_pref_s(cache_pref[i]) for i in pack_indices3)
 
+                        PACK_MIN_SHIFTS = 15
+
                         # 預先建立每位包班人員的 max_target 快取
                         def get_max_target3(idx, row):
                             el = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
@@ -1127,6 +1129,32 @@ if st.session_state.step >= 3:
                                 mt = st.session_state.custom_targets[idx]
                             return mt
                         max_target3 = {idx: get_max_target3(idx, row) for idx, row in ai_df.iterrows() if cache_pref[idx] != ""}
+
+                        # ── 公平分配目標預計算：各包班班別全月總配額 ÷ 同組人數 ──────────
+                        # 第一、二階段以此為上限，避免少數護士搶佔過多配額
+                        # 第三階段兜底再統一補足至 PACK_MIN_SHIFTS（15班下限）
+                        def _get_group_quota_col(ps):
+                            if ps == "12-8": return "12-8"
+                            if ps in ("D", "E", "N"): return f"{ps}班"
+                            return None
+
+                        pack_fair_target = {}
+                        for _ps in pref_s_set:
+                            _group = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == _ps]
+                            _gsize = len(_group)
+                            _qcol  = _get_group_quota_col(_ps)
+                            if _gsize == 0 or _qcol is None:
+                                pack_fair_target[_ps] = PACK_MIN_SHIFTS
+                                continue
+                            try:
+                                _total_q = sum(
+                                    int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0][_qcol])
+                                    for d in range(1, month_days + 1)
+                                    if not edited_quota_df[edited_quota_df["日期"] == str(d)].empty
+                                )
+                                pack_fair_target[_ps] = _total_q // _gsize
+                            except (KeyError, ValueError, IndexError):
+                                pack_fair_target[_ps] = PACK_MIN_SHIFTS
 
                         # ── 第一階段：上課日先個別處理 ──
                         for idx, row in ai_df.iterrows():
@@ -1163,6 +1191,8 @@ if st.session_state.step >= 3:
                                 ))
                                 for idx in group_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
+                                    # 公平分配上限：超過每人均分目標則暫停，待兜底階段補足
+                                    if sum(1 for v in sched[idx] if v == pref_s) >= pack_fair_target.get(pref_s, PACK_MIN_SHIFTS): continue
                                     if en_quota_full3(pref_s, d_int): break  # 當日額滿，跳下一班別
                                     if can_work_base(idx, pref_s, d_int):
                                         sched[idx][d_int] = pref_s
@@ -1180,14 +1210,15 @@ if st.session_state.step >= 3:
                                 )
                                 for idx in group_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
+                                    # 公平分配上限：超過每人均分目標則暫停
+                                    if sum(1 for v in sched[idx] if v == pref_s) >= pack_fair_target.get(pref_s, PACK_MIN_SHIFTS): continue
                                     if en_quota_full3(pref_s, d_int): break  # 此假日 E/N 額已滿
                                     if can_work_base(idx, pref_s, d_int):
                                         sched[idx][d_int] = pref_s
                                         break  # 每班別在此假日只優先排一人（下次輪到下一位）
 
                         # ── 第三階段：兜底確保每位包班人員至少達到 15 班（下限保障）──
-                        # 特殊假別過多導致 personal_targets < 15 者除外
-                        PACK_MIN_SHIFTS = 15
+                        # 不受公平分配目標限制，直接補足至 PACK_MIN_SHIFTS（特殊假別過多者除外）
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
                             if pref == "": continue
