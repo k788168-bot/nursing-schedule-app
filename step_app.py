@@ -1308,6 +1308,22 @@ if st.session_state.step >= 3:
                                 return sum(1 for v in row_sched if isinstance(v, str) and v.startswith("D"))
                             return sum(1 for v in row_sched if v == ss)
 
+                        def _supp_quota_full(s_type, d_int):
+                            """回傳 True 表示當日該補充班別配額已滿（不得再安插）"""
+                            q_col = "12-8" if s_type == "12-8" else f"{s_type}班"
+                            row_d = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                            if row_d.empty: return False
+                            try:
+                                req = int(row_d.iloc[0][q_col])
+                            except (KeyError, ValueError):
+                                return False
+                            if s_type == "D":
+                                curr = sum(1 for i in ai_df.index
+                                           if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D"))
+                            else:
+                                curr = sum(1 for i in ai_df.index if sched[i][d_int] == s_type)
+                            return curr >= req
+
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
                             if pref == "": continue
@@ -1329,6 +1345,7 @@ if st.session_state.step >= 3:
                                 supp_now = _supp_count(sched[idx], supp_s)
                                 if pack_now + supp_now >= min_pack: break
                                 if sched[idx][d_int] not in ["", "上課"]: continue
+                                if _supp_quota_full(supp_s, d_int): continue  # 當日配額已滿，不得超出
                                 if can_work_base(idx, supp_s, d_int):
                                     sched[idx][d_int] = supp_s
 
