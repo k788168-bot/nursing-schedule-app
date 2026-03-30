@@ -740,7 +740,13 @@ if st.session_state.step >= 2:
         uploaded_ai = st.file_uploader("📂 上傳護理師參數名單 (Excel 檔)", type=["xlsx", "xls"])
         
         if uploaded_ai is not None:
-            ai_df = pd.read_excel(uploaded_ai).fillna("")
+            ai_df = pd.read_excel(uploaded_ai, header=0).fillna("")
+            # 若第一列為分類標頭（如「▌ 基本資料」），則改以第二列為欄位名
+            if "姓名" not in ai_df.columns:
+                ai_df = pd.read_excel(uploaded_ai, header=1).fillna("")
+            if "姓名" not in ai_df.columns:
+                st.error("❌ 找不到「姓名」欄位，請確認上傳的 Excel 格式正確（使用官方範本）。")
+                st.stop()
             st.session_state.ai_df = ai_df
             
             all_skills = set()
