@@ -91,6 +91,24 @@ def abbrev_display(val):
         return v[0]
     return val
 
+def apply_prewhite_dx(disp_df, ai_df_local, month_days_local):
+    """
+    將顯示用 DataFrame 中，預白日期對應的 D 格標為 Dx。
+    disp_df 已套用 abbrev_display()，此函數在其之後呼叫。
+    使用 iat（位置索引）須確保 disp_df 與 ai_df_local 列順序一致。
+    """
+    for _dx_ri, (_, _dx_row) in enumerate(ai_df_local.iterrows()):
+        for _dx_ds in str(_dx_row.get("預白日期", "")).split(","):
+            if _dx_ds.strip().isdigit():
+                _dx_d = int(_dx_ds.strip())
+                if 1 <= _dx_d <= month_days_local:
+                    _dx_col = str(_dx_d)
+                    if _dx_col in disp_df.columns:
+                        _dx_curr = str(disp_df.iat[_dx_ri, disp_df.columns.get_loc(_dx_col)]).strip()
+                        if _dx_curr == "D":
+                            disp_df.iat[_dx_ri, disp_df.columns.get_loc(_dx_col)] = "Dx"
+    return disp_df
+
 # 定義全域顏色渲染函數
 def color_shifts(val):
     v = str(val).upper().strip()
@@ -736,25 +754,27 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
         for d in range(1, month_days_local + 1):
             day_str = str(d)
 
-            # 12-8 班：A組需3人、B組需3人
+            # 12-8 班：A組需3人、B組需3人（僅在當日 12-8 配額 > 0 時才做組別平衡檢查，避免節假日假陽性）
+            _req_128_r = int(quota_df[quota_df["日期"] == day_str].iloc[0]["12-8"]) if not quota_df[quota_df["日期"] == day_str].empty else 0
             nurses_128 = [i for i in ai_df_local.index if sched_df.at[i, day_str] == "12-8"]
-            if nurses_128:
+            if _req_128_r > 0 and nurses_128:
                 a128 = sum(1 for i in nurses_128 if cache_group_radar.get(i) == "A")
                 b128 = sum(1 for i in nurses_128 if cache_group_radar.get(i) == "B")
-                if a128 != 3:
-                    shortages.append(f"🚨 {day_str}號：12-8 班 A組 {a128} 人（應為3）")
-                if b128 != 3:
-                    shortages.append(f"🚨 {day_str}號：12-8 班 B組 {b128} 人（應為3）")
+                if a128 < 3:
+                    shortages.append(f"🚨 {day_str}號：12-8 班 A組僅 {a128} 人（需≥3）")
+                if b128 < 3:
+                    shortages.append(f"🚨 {day_str}號：12-8 班 B組僅 {b128} 人（需≥3）")
 
-            # E 小夜班：A組需2人、B組需2人
+            # E 小夜班：A組需2人、B組需2人（同上，僅在 E 班配額 > 0 時才檢查）
+            _req_e_r = int(quota_df[quota_df["日期"] == day_str].iloc[0]["E班"]) if not quota_df[quota_df["日期"] == day_str].empty else 0
             nurses_e = [i for i in ai_df_local.index if sched_df.at[i, day_str] == "E"]
-            if nurses_e:
+            if _req_e_r > 0 and nurses_e:
                 ae = sum(1 for i in nurses_e if cache_group_radar.get(i) == "A")
                 be = sum(1 for i in nurses_e if cache_group_radar.get(i) == "B")
-                if ae != 2:
-                    shortages.append(f"🚨 {day_str}號：E 班 A組 {ae} 人（應為2）")
-                if be != 2:
-                    shortages.append(f"🚨 {day_str}號：E 班 B組 {be} 人（應為2）")
+                if ae < 2:
+                    shortages.append(f"🚨 {day_str}號：E 班 A組僅 {ae} 人（需≥2）")
+                if be < 2:
+                    shortages.append(f"🚨 {day_str}號：E 班 B組僅 {be} 人（需≥2）")
 
             # 週六白班：A組至少3人
             if d in sat_set_r:
@@ -1667,6 +1687,8 @@ if st.session_state.step >= 3:
                 _disp_pack = st.session_state.pack_sched.copy()
                 for _c in _day_cols_p:
                     _disp_pack[_c] = _disp_pack[_c].apply(abbrev_display)
+                # 預白班：D 格標為 Dx
+                _disp_pack = apply_prewhite_dx(_disp_pack, st.session_state.ai_df, month_days)
                 st.dataframe(
                     _disp_pack.style.map(color_shifts, subset=_day_cols_p),
                     use_container_width=True
@@ -1950,6 +1972,8 @@ if st.session_state.step >= 4:
                 _disp_night = st.session_state.night_sched.copy()
                 for _c in _day_cols_n:
                     _disp_night[_c] = _disp_night[_c].apply(abbrev_display)
+                # 預白班：D 格標為 Dx
+                _disp_night = apply_prewhite_dx(_disp_night, st.session_state.ai_df, month_days)
                 st.dataframe(
                     _disp_night.style.map(color_shifts, subset=_day_cols_n),
                     use_container_width=True
@@ -2310,6 +2334,14 @@ if st.session_state.step >= 5:
                                     elif hol_worked == target_hol: score += 1000000
                                     else: score -= (hol_worked * 1000000)
 
+                                # ── 應上班天數達標優先：落後越多越優先（每欠1天加80萬分）──
+                                # 目的：防止月初休假較多的護理師（因「孤立班」評分劣勢）持續被跳過，
+                                #       導致月末欠班無法補回。
+                                _worked_now = sum(1 for v in sched[idx] if is_work(v))
+                                _needed_now = personal_targets[idx] - _worked_now
+                                if _needed_now > 0:
+                                    score += _needed_now * 800_000
+
                                 # ── 連班型態感知：避免上一休一 ──
                                 _y5b = sched[idx][d_int - 1] if d_int > 1 else ""
                                 _t5b = sched[idx][d_int + 1] if d_int < month_days else ""
@@ -2483,9 +2515,11 @@ if st.session_state.step >= 5:
                                 if curr5 >= req5:
                                     # 包班人員不改排白班，直接跳過
                                     continue
-                        # ── 補足 Pass 1：D班 / 12-8 每日配額上限檢查（避免超出人力配額）──
-                        # NO_HOL_ADMIN 不計入單位人力，不受 D班配額限制；配額計數也排除 NO_HOL_ADMIN
+                        # ── 補足 Pass 1：D班 / 12-8 每日配額上限檢查 ──
+                        # 假日：嚴格遵守配額上限（假日人力有限）
+                        # 平日：D班配額為最低需求，允許超額補足個人應上班天數，不強制截止
                         _row_q_p1 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        _is_hol_p1 = d_int in _hol_set5
                         if not _row_q_p1.empty:
                             try:
                                 if eff_s5 == "D":
@@ -2496,8 +2530,9 @@ if st.session_state.step >= 5:
                                             if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
                                             and cache_title[i] not in NO_HOL_ADMIN
                                         )
-                                        if _curr_p1 >= _req_p1:
-                                            continue
+                                        if _curr_p1 >= _req_p1 and _is_hol_p1:
+                                            continue  # 假日嚴守上限
+                                        # 平日：即使超過配額最低需求，仍允許補足個人目標
                                 elif eff_s5 == "12-8":
                                     _req_p1 = int(_row_q_p1.iloc[0]["12-8"])
                                     _curr_p1 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -2576,9 +2611,10 @@ if st.session_state.step >= 5:
                             if _curr_f >= _req_f:
                                 # 包班人員不改排白班，直接跳過
                                 continue
-                    # ── 補足 Pass 2：D班 / 12-8 每日配額上限檢查（避免超出人力配額）──
-                    # NO_HOL_ADMIN 不計入單位人力，不受 D班配額限制；配額計數也排除 NO_HOL_ADMIN
+                    # ── 補足 Pass 2：D班 / 12-8 每日配額上限檢查 ──
+                    # 假日：嚴格遵守配額上限；平日：允許超額補足個人應上班天數
                     _row_q_p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                    _is_hol_p2 = d_int in _hol_set_f5
                     if not _row_q_p2.empty:
                         try:
                             if eff_sf == "D":
@@ -2589,8 +2625,8 @@ if st.session_state.step >= 5:
                                         if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
                                         and cache_title[i] not in NO_HOL_ADMIN
                                     )
-                                    if _curr_p2 >= _req_p2:
-                                        continue
+                                    if _curr_p2 >= _req_p2 and _is_hol_p2:
+                                        continue  # 假日嚴守上限；平日允許超額補足
                             elif eff_sf == "12-8":
                                 _req_p2 = int(_row_q_p2.iloc[0]["12-8"])
                                 _curr_p2 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -2772,6 +2808,8 @@ if st.session_state.step >= 5:
                 _disp_d = st.session_state.d_sched.copy()
                 for _c in _day_cols_d:
                     _disp_d[_c] = _disp_d[_c].apply(abbrev_display)
+                # 預白班：D 格標為 Dx
+                _disp_d = apply_prewhite_dx(_disp_d, ai_df, month_days)
                 st.dataframe(
                     _disp_d.style.map(color_shifts, subset=_day_cols_d),
                     use_container_width=True
@@ -3171,14 +3209,7 @@ if st.session_state.step >= 6:
         for _c in _day_cols:
             _view_df[_c] = _view_df[_c].apply(abbrev_display)
         # 預白班：D 格標為 Dx（視覺區分預排白班）
-        for _pw_ri, (_, _pw_row) in enumerate(ai_df.iterrows()):
-            for _pw_ds in str(_pw_row.get("預白日期", "")).split(","):
-                if _pw_ds.strip().isdigit():
-                    _pw_d = int(_pw_ds.strip())
-                    if 1 <= _pw_d <= month_days:
-                        _pw_col = str(_pw_d)
-                        if _pw_col in _view_df.columns and str(_view_df.iat[_pw_ri, _view_df.columns.get_loc(_pw_col)]).strip() == "D":
-                            _view_df.iat[_pw_ri, _view_df.columns.get_loc(_pw_col)] = "Dx"
+        _view_df = apply_prewhite_dx(_view_df, ai_df, month_days)
         styled_final_df = _view_df.style.map(color_shifts, subset=_day_cols)
 
         stats = []
@@ -3278,15 +3309,7 @@ if st.session_state.step >= 6:
             st.dataframe(violation_df, use_container_width=True)
 
         # 預白班：建立 Dx 標記版副本供 Excel 匯出使用
-        _export_sched6 = st.session_state.final_sched.copy()
-        for _pw6_ri, (_, _pw6_row) in enumerate(ai_df.iterrows()):
-            for _pw6_ds in str(_pw6_row.get("預白日期", "")).split(","):
-                if _pw6_ds.strip().isdigit():
-                    _pw6_d = int(_pw6_ds.strip())
-                    if 1 <= _pw6_d <= month_days:
-                        _pw6_col = str(_pw6_d)
-                        if _pw6_col in _export_sched6.columns and str(_export_sched6.iat[_pw6_ri, _export_sched6.columns.get_loc(_pw6_col)]).strip() == "D":
-                            _export_sched6.iat[_pw6_ri, _export_sched6.columns.get_loc(_pw6_col)] = "Dx"
+        _export_sched6 = apply_prewhite_dx(st.session_state.final_sched.copy(), ai_df, month_days)
         output = build_colored_excel(
             _export_sched6,
             stats_df,
