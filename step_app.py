@@ -1236,36 +1236,43 @@ if st.session_state.step >= 2:
                 })
             _targets_df_raw = pd.DataFrame(_targets_data)
 
-            # ── 總覽表（唯讀）────────────────────────────────────────────
-            st.dataframe(_targets_df_raw, hide_index=True, use_container_width=True)
-
-            # ── 手動調整區（每人獨立 number_input，Streamlit 自動保存狀態）──
-            with st.expander("✏️ 手動調整個別應上班天數", expanded=False):
-                st.caption("若有特殊情況（長期停班、特殊協議等），可在此直接修改各人目標天數。")
-                _hdr0, _hdr1, _hdr2, _hdr3 = st.columns([3, 2, 2, 2])
-                _hdr0.markdown("**姓名**")
-                _hdr1.markdown("**系統計算值**")
-                _hdr2.markdown("**理論可達上限**")
-                _hdr3.markdown("**應上班天數**")
-                for _tr2 in _targets_df_raw.itertuples(index=False):
-                    _idx2 = ai_df[ai_df["姓名"] == _tr2.姓名].index
-                    if len(_idx2) == 0:
-                        continue
-                    _idx2 = _idx2[0]
-                    _cur2 = (st.session_state.custom_targets or {}).get(_idx2, int(_tr2.系統計算值))
-                    _c0, _c1, _c2, _c3 = st.columns([3, 2, 2, 2])
-                    _c0.write(_tr2.姓名)
-                    _c1.write(int(_tr2.系統計算值))
-                    _c2.write(int(_tr2.理論可達上限))
-                    _new2 = _c3.number_input(
-                        "應上班天數", min_value=0, max_value=st.session_state.month_days,
-                        value=_cur2, step=1,
-                        key=f"tgt2_{_idx2}", label_visibility="collapsed"
-                    )
-                    # 每次重繪都即時寫回（number_input 自帶 key 保存，此處確保 custom_targets 同步）
-                    if st.session_state.custom_targets is None:
-                        st.session_state.custom_targets = {}
-                    st.session_state.custom_targets[_idx2] = max(0, int(_new2))
+            # ── 手動編輯開關（與底稿表相同模式）────────────────────────
+            _edit_tgt = st.checkbox("🖊️ 開啟手動編輯模式", value=False, key="chk_edit_targets")
+            if _edit_tgt:
+                st.caption("💡 直接點擊「應上班天數」欄輸入目標天數，其餘欄位鎖定不可改")
+                # 初始化快照（進入編輯模式時從最新計算值建立；ai_df 換檔時重建）
+                _snap_key = id(st.session_state.ai_df)
+                if ("targets_edit_snapshot" not in st.session_state
+                        or st.session_state.get("targets_snapshot_key") != _snap_key):
+                    st.session_state.targets_edit_snapshot = _targets_df_raw.copy()
+                    st.session_state.targets_snapshot_key = _snap_key
+                _edited_tgt = st.data_editor(
+                    st.session_state.targets_edit_snapshot,
+                    column_config={
+                        "姓名":          st.column_config.TextColumn("姓名",        disabled=True),
+                        "職稱":          st.column_config.TextColumn("職稱",        disabled=True),
+                        "當月天數":      st.column_config.NumberColumn("當月天數",  disabled=True),
+                        "計畫休假":      st.column_config.NumberColumn("計畫休假",  disabled=True),
+                        "額外扣減":      st.column_config.NumberColumn("額外扣減",  disabled=True),
+                        "系統計算值":    st.column_config.NumberColumn("系統計算值",disabled=True),
+                        "理論可達上限":  st.column_config.NumberColumn("理論可達上限 📊", disabled=True),
+                        "應上班天數":    st.column_config.NumberColumn("應上班天數",
+                                            min_value=0, max_value=st.session_state.month_days, step=1),
+                    },
+                    hide_index=True, use_container_width=True, key="edit_targets_step2"
+                )
+                # 把編輯結果存回快照（下次重繪時用快照而非重算 DataFrame，編輯才不會被覆蓋）
+                st.session_state.targets_edit_snapshot = _edited_tgt
+                # 同步到 custom_targets
+                _custom_live = {}
+                for _trow in _edited_tgt.itertuples(index=False):
+                    _match = ai_df[ai_df["姓名"] == _trow.姓名].index
+                    if len(_match) > 0:
+                        _custom_live[_match[0]] = max(0, int(_trow.應上班天數))
+                if _custom_live:
+                    st.session_state.custom_targets = _custom_live
+            else:
+                st.dataframe(_targets_df_raw, hide_index=True, use_container_width=True)
 
             col_btn1, col_btn2 = st.columns([1, 4])
             with col_btn1:
@@ -1279,7 +1286,7 @@ if st.session_state.step >= 2:
                     st.session_state.skill_cols = temp_skills
                     st.session_state.edited_weekly_df = edited_weekly_df
                     st.session_state.edited_quota_df = edited_quota_df
-                    # custom_targets 已由 number_input 即時同步，直接進下一步
+                    # custom_targets 已由編輯模式即時同步，直接進下一步
                     st.session_state.step = 3
                     st.rerun()
     else:
