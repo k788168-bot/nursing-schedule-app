@@ -1046,24 +1046,34 @@ if st.session_state.step >= 2:
                             if d_v.isdigit() and 1 <= int(d_v) <= st.session_state.month_days:
                                 sched[idx][int(d_v)] = l_v
 
+                # ── 公差日期（優先於預白日期填入）────────────────────────
+                gongcha_str = str(row.get("公差日期", "")).strip()
+                if gongcha_str:
+                    for d_v in [s.strip() for s in gongcha_str.split(",") if s.strip().isdigit()]:
+                        if 1 <= int(d_v) <= st.session_state.month_days and sched[idx][int(d_v)] == "":
+                            sched[idx][int(d_v)] = "公差"
+
                 rtd = str(row.get("預白日期", "")).strip()
                 if rtd:
                     for d_v in [s.strip() for s in rtd.split(",") if s.strip().isdigit()]:
                         if 1 <= int(d_v) <= st.session_state.month_days and sched[idx][int(d_v)] == "":
                             sched[idx][int(d_v)] = "D"
                             pre_type_map[(idx, int(d_v))] = "預白"
-                            
+
+                # ── 上課日期：以包班班別填入（大夜→N，小夜→E，其他→D）──────
+                # D加班線僅可在第8天以後；初始化一律填基本班別
                 class_str = str(row.get("上課日期", "")).strip()
                 if class_str:
+                    _pref_cls = str(row.get("包班意願", "")).strip()
+                    if "大夜" in _pref_cls:
+                        _class_shift = "N"
+                    else:
+                        # 上課日不可排E班或12-8班，小夜包班亦改填D
+                        _class_shift = "D"
                     for d_v in [s.strip() for s in class_str.split(",") if s.strip().isdigit()]:
-                        if 1 <= int(d_v) <= st.session_state.month_days and sched[idx][int(d_v)] == "":
-                            sched[idx][int(d_v)] = "上課"
-
-                gongcha_str = str(row.get("公差日期", "")).strip()
-                if gongcha_str:
-                    for d_v in [s.strip() for s in gongcha_str.split(",") if s.strip().isdigit()]:
-                        if 1 <= int(d_v) <= st.session_state.month_days and sched[idx][int(d_v)] == "":
-                            sched[idx][int(d_v)] = "公差"
+                        d_int_cls = int(d_v)
+                        if 1 <= d_int_cls <= st.session_state.month_days and sched[idx][d_int_cls] == "":
+                            sched[idx][d_int_cls] = _class_shift
                             
                 mand_holiday_str = str(row.get("國定假日必上班別", "")).strip()
                 if mand_holiday_str:
@@ -1379,11 +1389,12 @@ if st.session_state.step >= 3:
                         nat_list3 = st.session_state.nat_holidays_list
                         illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
 
-                        # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別）──────────────
+                        # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
                         # 均等化互換時，這些格的班別不可被移走
                         _prewhite_set3: set = set()
                         _mand_hol_set3: set = set()
                         _gongcha_set3:  set = set()
+                        _class_set3:    set = set()
                         for _pi3, _pr3 in ai_df.iterrows():
                             for _dv3 in str(_pr3.get("預白日期", "")).split(","):
                                 if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
@@ -1398,7 +1409,10 @@ if st.session_state.step >= 3:
                             for _dv3 in str(_pr3.get("公差日期", "")).split(","):
                                 if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
                                     _gongcha_set3.add((_pi3, int(_dv3.strip())))
-                        _locked_set3 = _prewhite_set3 | _mand_hol_set3 | _gongcha_set3
+                            for _dv3 in str(_pr3.get("上課日期", "")).split(","):
+                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
+                                    _class_set3.add((_pi3, int(_dv3.strip())))
+                        _locked_set3 = _prewhite_set3 | _mand_hol_set3 | _gongcha_set3 | _class_set3
 
                         def can_work_base(n_idx, s, d_int):
                             if sched[n_idx][d_int] not in ["", "上課"]: return False
@@ -1898,11 +1912,12 @@ if st.session_state.step >= 4:
 
                     illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
 
-                    # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別）──────────────
+                    # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
                     # E/N 均等化互換時，這些格的班別不可被移走
                     _prewhite_set4: set = set()
                     _mand_hol_set4: set = set()
                     _gongcha_set4:  set = set()
+                    _class_set4:    set = set()
                     for _pi4, _pr4 in ai_df.iterrows():
                         for _dv4 in str(_pr4.get("預白日期", "")).split(","):
                             if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
@@ -1917,7 +1932,10 @@ if st.session_state.step >= 4:
                         for _dv4 in str(_pr4.get("公差日期", "")).split(","):
                             if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
                                 _gongcha_set4.add((_pi4, int(_dv4.strip())))
-                    _locked_set4 = _prewhite_set4 | _mand_hol_set4 | _gongcha_set4
+                        for _dv4 in str(_pr4.get("上課日期", "")).split(","):
+                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
+                                _class_set4.add((_pi4, int(_dv4.strip())))
+                    _locked_set4 = _prewhite_set4 | _mand_hol_set4 | _gongcha_set4 | _class_set4
 
                     def can_work_base(n_idx, s, d_int, strict_wow=True):
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
@@ -2295,11 +2313,12 @@ if st.session_state.step >= 5:
                     if idx in st.session_state.custom_targets:
                         personal_targets[idx] = st.session_state.custom_targets[idx]
 
-            # ── 預先設定保護集合（預白班 / 公差 / 國定必上班別）────────────────
+            # ── 預先設定保護集合（預白班 / 公差 / 國定必上班別 / 上課日期）────────────────
             # 這些班次由護理長在 Excel 中預先指定，均等化互換時絕對不可移動
             _prewhite_set5: set = set()   # (idx, day) → 預白班
             _mand_hol_set5: set = set()   # (idx, day) → 國定假日必上班別
             _gongcha_set5:  set = set()   # (idx, day) → 公差（已存為 "公差"，但保留集合供一致性檢查）
+            _class_set5:    set = set()   # (idx, day) → 上課日期
             for _pi5, _pr5 in ai_df.iterrows():
                 for _dv in str(_pr5.get("預白日期", "")).split(","):
                     if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
@@ -2314,8 +2333,11 @@ if st.session_state.step >= 5:
                 for _dv in str(_pr5.get("公差日期", "")).split(","):
                     if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
                         _gongcha_set5.add((_pi5, int(_dv.strip())))
+                for _dv in str(_pr5.get("上課日期", "")).split(","):
+                    if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
+                        _class_set5.add((_pi5, int(_dv.strip())))
             # 統合保護集合：均等化互換時，這些 (人員, 日期) 組合的班次不可被移動
-            _locked_set5 = _prewhite_set5 | _mand_hol_set5 | _gongcha_set5
+            _locked_set5 = _prewhite_set5 | _mand_hol_set5 | _gongcha_set5 | _class_set5
 
             # 12-8 先於 D 班排入，排完後 D 班直接填滿至 personal_targets
 
@@ -2329,7 +2351,7 @@ if st.session_state.step >= 5:
                 if cache_title[n_idx] in NO_HOL_SET and d_int in set(sat_list5) | set(sun_list5) | set(nat_list5): return False
                 # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                 if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5, cache_can_nat5, sat_list5, sun_list5, nat_list5): return False
-                if str(d_int) in class_days_map.get(n_idx, []) and s != "D": return False
+                if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False  # 上課日禁E/12-8
 
                 worked = sum(1 for x in sched[n_idx] if is_work(x))
                 if worked >= personal_targets[n_idx]: return False
@@ -2903,7 +2925,7 @@ if st.session_state.step >= 5:
                 # 包班人員有假日出勤義務，不受假日資格限制
                 if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5,
                         cache_can_nat5, sat_list5, sun_list5, nat_list5): return False
-                if str(d_int) in class_days_map.get(n_idx, []) and s != "D": return False
+                if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False  # 上課日禁E/12-8
                 if sum(1 for x in sched[n_idx] if is_work(x)) >= personal_targets[n_idx]: return False
                 y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
                 t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
@@ -3502,10 +3524,11 @@ if st.session_state.step >= 6:
                         sched[n_idx][d_int] = _s2
 
             # ── Step 6 夜班均等化：清尾補班 Pass 2 後重新拉平 E+N+12-8 差距 ≤ 1 ──
-            # 建立 _locked_set6（預白班/公差/國定假日必上班別，不可被互換移動）
+            # 建立 _locked_set6（預白班/公差/國定假日必上班別/上課日期，不可被互換移動）
             _prewhite_set6: set = set()
             _mand_hol_set6: set = set()
             _gongcha_set6:  set = set()
+            _class_set6:    set = set()
             for _pi6, _pr6 in ai_df.iterrows():
                 for _dv6 in str(_pr6.get("預白日期", "")).split(","):
                     if _dv6.strip().isdigit() and 1 <= int(_dv6.strip()) <= month_days:
@@ -3520,7 +3543,10 @@ if st.session_state.step >= 6:
                 for _dv6 in str(_pr6.get("公差日期", "")).split(","):
                     if _dv6.strip().isdigit() and 1 <= int(_dv6.strip()) <= month_days:
                         _gongcha_set6.add((_pi6, int(_dv6.strip())))
-            _locked_set6 = _prewhite_set6 | _mand_hol_set6 | _gongcha_set6
+                for _dv6 in str(_pr6.get("上課日期", "")).split(","):
+                    if _dv6.strip().isdigit() and 1 <= int(_dv6.strip()) <= month_days:
+                        _class_set6.add((_pi6, int(_dv6.strip())))
+            _locked_set6 = _prewhite_set6 | _mand_hol_set6 | _gongcha_set6 | _class_set6
 
             # 均等池：非包班、非組長、具夜班資格
             _night_elig6 = [
