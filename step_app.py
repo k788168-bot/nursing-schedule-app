@@ -1215,7 +1215,11 @@ if st.session_state.step >= 2:
                 _raw_avail  = _avail_weekday + _avail_hol
                 # 勞基法折損估計：連五（每5天強制休1天）+孤立班約讓可用天數縮減 15%
                 # 若月末長假導致最後工作日集中前段，折損可能更高（此為保守下限估計）
-                _law_deduct = max(0, round(_raw_avail * 0.15))
+                # 傷兵/助理/護理長/副護理長（NO_HOL_ADMIN）：強制填滿所有平日，無勞基法連班限制，折損為 0
+                if _title_scan in NO_HOL_ADMIN:
+                    _law_deduct = 0
+                else:
+                    _law_deduct = max(0, round(_raw_avail * 0.15))
                 _max_achiev = max(0, _raw_avail - _law_deduct)
 
                 # 若已有手動調整，顯示調整後的值
