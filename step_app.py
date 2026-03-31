@@ -1072,6 +1072,7 @@ if st.session_state.step >= 2:
                         _class_shift = "D"
                     for d_v in [s.strip() for s in class_str.split(",") if s.strip().isdigit()]:
                         d_int_cls = int(d_v)
+                        # 預休日期優先於上課日期：格子非空時不覆蓋
                         if 1 <= d_int_cls <= st.session_state.month_days and sched[idx][d_int_cls] == "":
                             sched[idx][d_int_cls] = _class_shift
                             
