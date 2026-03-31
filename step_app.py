@@ -334,6 +334,21 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
             )
         # 超出應休天數的部分才算額外扣減
         excess_rest = max(0, pre_o_days + long_leave_days - target_off)
+
+        # ── 假日公差補休抵扣（僅適用 NO_HOL_SET，即 target_off=0）────────────
+        # NO_HOL_SET（組長/護理長等）平時不排假日班；若假日出公差屬額外出勤，
+        # 依慣例可獲一天補休，抵消等量的平日O日扣減（每一假日公差抵一天）
+        if target_off == 0:
+            gongcha_str = str(row.get("公差日期", "")).strip()
+            if gongcha_str:
+                gongcha_hol_credit = sum(
+                    1 for d in gongcha_str.split(",")
+                    if d.strip().isdigit()
+                    and 1 <= int(d.strip()) <= month_days
+                    and not is_weekday(int(d.strip()))   # 落在假日的公差才計入
+                )
+                excess_rest = max(0, excess_rest - gongcha_hol_credit)
+
         return excess_rest + special_leave_days
     else:
         # ── 舊邏輯（向下相容）：O 不扣，長假 + 特殊假別才扣 ─────────────────
@@ -1236,43 +1251,43 @@ if st.session_state.step >= 2:
                 })
             _targets_df_raw = pd.DataFrame(_targets_data)
 
-            # ── 手動編輯開關（與底稿表相同模式）────────────────────────
-            _edit_tgt = st.checkbox("🖊️ 開啟手動編輯模式", value=False, key="chk_edit_targets")
-            if _edit_tgt:
-                st.caption("💡 直接點擊「應上班天數」欄輸入目標天數，其餘欄位鎖定不可改")
-                # 初始化快照（進入編輯模式時從最新計算值建立；ai_df 換檔時重建）
-                _snap_key = id(st.session_state.ai_df)
-                if ("targets_edit_snapshot" not in st.session_state
-                        or st.session_state.get("targets_snapshot_key") != _snap_key):
-                    st.session_state.targets_edit_snapshot = _targets_df_raw.copy()
-                    st.session_state.targets_snapshot_key = _snap_key
-                _edited_tgt = st.data_editor(
-                    st.session_state.targets_edit_snapshot,
-                    column_config={
-                        "姓名":          st.column_config.TextColumn("姓名",        disabled=True),
-                        "職稱":          st.column_config.TextColumn("職稱",        disabled=True),
-                        "當月天數":      st.column_config.NumberColumn("當月天數",  disabled=True),
-                        "計畫休假":      st.column_config.NumberColumn("計畫休假",  disabled=True),
-                        "額外扣減":      st.column_config.NumberColumn("額外扣減",  disabled=True),
-                        "系統計算值":    st.column_config.NumberColumn("系統計算值",disabled=True),
-                        "理論可達上限":  st.column_config.NumberColumn("理論可達上限 📊", disabled=True),
-                        "應上班天數":    st.column_config.NumberColumn("應上班天數",
-                                            min_value=0, max_value=st.session_state.month_days, step=1),
-                    },
-                    hide_index=True, use_container_width=True, key="edit_targets_step2"
-                )
-                # 把編輯結果存回快照（下次重繪時用快照而非重算 DataFrame，編輯才不會被覆蓋）
-                st.session_state.targets_edit_snapshot = _edited_tgt
-                # 同步到 custom_targets
-                _custom_live = {}
-                for _trow in _edited_tgt.itertuples(index=False):
-                    _match = ai_df[ai_df["姓名"] == _trow.姓名].index
-                    if len(_match) > 0:
-                        _custom_live[_match[0]] = max(0, int(_trow.應上班天數))
-                if _custom_live:
-                    st.session_state.custom_targets = _custom_live
-            else:
-                st.dataframe(_targets_df_raw, hide_index=True, use_container_width=True)
+            # ── 應上班天數確認表（與底稿表相同的 checkbox 開關模式）────────────────
+            # 每次重繪都把最新計算值寫入 session_state（第一次建立；
+            # 之後若使用者未開啟編輯模式，仍保持 custom_targets 的手動值）
+            if "targets_df_ss" not in st.session_state:
+                st.session_state.targets_df_ss = _targets_df_raw.copy()
+
+            with st.expander("📋 確認每人本月應上班天數", expanded=True):
+                _edit_tgt = st.checkbox("🖊️ 開啟手動編輯模式", value=False, key="chk_edit_targets")
+                if _edit_tgt:
+                    st.caption("💡 直接點擊「應上班天數」欄輸入目標天數，其餘欄位鎖定不可改")
+                    _edited_tgt = st.data_editor(
+                        st.session_state.targets_df_ss,
+                        column_config={
+                            "姓名":          st.column_config.TextColumn("姓名",         disabled=True),
+                            "職稱":          st.column_config.TextColumn("職稱",         disabled=True),
+                            "當月天數":      st.column_config.NumberColumn("當月天數",   disabled=True),
+                            "計畫休假":      st.column_config.NumberColumn("計畫休假",   disabled=True),
+                            "額外扣減":      st.column_config.NumberColumn("額外扣減",   disabled=True),
+                            "系統計算值":    st.column_config.NumberColumn("系統計算值", disabled=True),
+                            "理論可達上限":  st.column_config.NumberColumn("理論可達上限 📊", disabled=True),
+                            "應上班天數":    st.column_config.NumberColumn("應上班天數",
+                                                min_value=0, max_value=st.session_state.month_days, step=1),
+                        },
+                        hide_index=True, use_container_width=True, key="edit_targets_step2"
+                    )
+                    # 存回 session_state（下次重繪從這裡讀，不重算）
+                    st.session_state.targets_df_ss = _edited_tgt
+                    # 同步到 custom_targets
+                    _custom_live = {}
+                    for _trow in _edited_tgt.itertuples(index=False):
+                        _match = ai_df[ai_df["姓名"] == _trow.姓名].index
+                        if len(_match) > 0:
+                            _custom_live[_match[0]] = max(0, int(_trow.應上班天數))
+                    if _custom_live:
+                        st.session_state.custom_targets = _custom_live
+                else:
+                    st.dataframe(st.session_state.targets_df_ss, hide_index=True, use_container_width=True)
 
             col_btn1, col_btn2 = st.columns([1, 4])
             with col_btn1:
