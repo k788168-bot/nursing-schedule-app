@@ -2812,6 +2812,14 @@ if st.session_state.step >= 5:
             for idx in ai_df.index:
                 for d in range(1, month_days + 1):
                     if sched[idx][d] == "上課":
+                        # 假日：先檢查 D班 配額，已達上限則保留「上課」不轉換
+                        if d in _hol_set5:
+                            _row_sc = edited_quota_df[edited_quota_df["日期"] == str(d)]
+                            if not _row_sc.empty:
+                                _req_sc = int(_row_sc.iloc[0]["D班"])
+                                _curr_sc = sum(1 for _i in ai_df.index if sched[_i][d] == "D")
+                                if _curr_sc >= _req_sc:
+                                    continue  # 已達假日 D班 配額，保留「上課」
                         sched[idx][d] = "D"
 
             deficit_nurses = sorted(
