@@ -1184,27 +1184,82 @@ if st.session_state.step >= 2:
                     _el = calc_extra_leaves(row, st.session_state.month_days,
                                             _scan_sat, _scan_sun, _scan_nat, target_off=_toff_scan)
                     _calc_t = max(0, st.session_state.month_days - _toff_scan - _el)
+
+                # ── 理論可達上限：考慮 O + 長假佔用的平日，估算在勞基法限制下最多能上幾天 ──
+                # 原理：月份所有平日 - O平日 - 長假平日 = 剩餘可工作平日
+                #       加上護理師可上的假日天數（若具備假日出勤能力）
+                #       再扣除勞基法估計折損（連五/孤立班，約每5天失去0.5天）
+                _o_days_scan   = set()
+                _ll_days_scan  = set()
+                for _ds in str(row.get("預休日期",      "")).split(","):
+                    if _ds.strip().isdigit() and 1 <= int(_ds.strip()) <= st.session_state.month_days:
+                        _o_days_scan.add(int(_ds.strip()))
+                for _ds in str(row.get("預約長假日期",  "")).split(","):
+                    if _ds.strip().isdigit() and 1 <= int(_ds.strip()) <= st.session_state.month_days:
+                        _ll_days_scan.add(int(_ds.strip()))
+                _blocked_scan  = _o_days_scan | _ll_days_scan | _scan_hol_set_days
+                _avail_weekday = sum(1 for d in range(1, st.session_state.month_days + 1)
+                                     if d not in _blocked_scan)
+                # 加上護理師可上的假日（假日出勤能力允許，且未被O/長假佔用）
+                _can_sat_s  = str(row.get("能上週六",    "")).strip() == "是"
+                _can_sun_s  = str(row.get("能上週日",    "")).strip() == "是"
+                _can_nat_s  = str(row.get("能上國定假日","")).strip() == "是"
+                _avail_hol  = sum(
+                    1 for d in _scan_hol_set_days
+                    if d not in (_o_days_scan | _ll_days_scan) and (
+                        (d in set(_scan_sat) and _can_sat_s) or
+                        (d in set(_scan_sun) and _can_sun_s) or
+                        (d in set(_scan_nat) and _can_nat_s)
+                    )
+                ) if _title_scan not in NO_HOL_SET else 0
+                _raw_avail  = _avail_weekday + _avail_hol
+                # 勞基法折損估計：連五（每5天強制休1天）+孤立班約讓可用天數縮減 15%
+                # 若月末長假導致最後工作日集中前段，折損可能更高（此為保守下限估計）
+                _law_deduct = max(0, round(_raw_avail * 0.15))
+                _max_achiev = max(0, _raw_avail - _law_deduct)
+
                 # 若已有手動調整，顯示調整後的值
                 _prev = (st.session_state.custom_targets or {}).get(idx, _calc_t)
                 _targets_data.append({
-                    "姓名":         row["姓名"],
-                    "職稱":         _title_scan,
-                    "當月天數":     st.session_state.month_days,
-                    "計畫休假":     _toff_scan,
-                    "額外扣減":     _el,
-                    "系統計算值":   _calc_t,
-                    "應上班天數":   _prev,
+                    "姓名":           row["姓名"],
+                    "職稱":           _title_scan,
+                    "當月天數":       st.session_state.month_days,
+                    "計畫休假":       _toff_scan,
+                    "額外扣減":       _el,
+                    "系統計算值":     _calc_t,
+                    "應上班天數":     _prev,
+                    "理論可達上限":   _max_achiev,
                 })
+            _targets_df_raw = pd.DataFrame(_targets_data)
+
+            # ── 欠班預警：理論可達上限 < 應上班天數 → 可能有結構性欠班 ──
+            _struct_deficit = _targets_df_raw[_targets_df_raw["理論可達上限"] < _targets_df_raw["應上班天數"]]
+            if not _struct_deficit.empty:
+                st.warning(
+                    f"⚠️ **長假/預休結構性欠班預警（{len(_struct_deficit)} 人）**：以下護理師因 O/長假佔用工作日過多，"
+                    "在勞基法限制下，理論上**無法達到**所設應上班天數目標，建議護理長手動調低「應上班天數」："
+                )
+                _warn_rows = []
+                for _, _wr in _struct_deficit.iterrows():
+                    _gap = int(_wr["應上班天數"]) - int(_wr["理論可達上限"])
+                    _warn_rows.append(
+                        f"- **{_wr['姓名']}**：目標 {int(_wr['應上班天數'])} 天，理論上限 {int(_wr['理論可達上限'])} 天"
+                        f"（差距 **{_gap}** 天，建議目標調整為 {int(_wr['理論可達上限'])}）"
+                    )
+                st.markdown("\n".join(_warn_rows))
+
             _targets_edit_df = st.data_editor(
-                pd.DataFrame(_targets_data),
+                _targets_df_raw,
                 column_config={
-                    "姓名":          st.column_config.TextColumn("姓名", disabled=True),
-                    "職稱":          st.column_config.TextColumn("職稱", disabled=True),
-                    "當月天數":      st.column_config.NumberColumn("當月天數", disabled=True),
-                    "計畫休假":      st.column_config.NumberColumn("計畫休假", disabled=True),
-                    "額外扣減":      st.column_config.NumberColumn("額外扣減", disabled=True),
-                    "系統計算值":    st.column_config.NumberColumn("系統計算值", disabled=True),
-                    "應上班天數":    st.column_config.NumberColumn("應上班天數", min_value=0, max_value=st.session_state.month_days, step=1),
+                    "姓名":            st.column_config.TextColumn("姓名", disabled=True),
+                    "職稱":            st.column_config.TextColumn("職稱", disabled=True),
+                    "當月天數":        st.column_config.NumberColumn("當月天數", disabled=True),
+                    "計畫休假":        st.column_config.NumberColumn("計畫休假", disabled=True),
+                    "額外扣減":        st.column_config.NumberColumn("額外扣減", disabled=True),
+                    "系統計算值":      st.column_config.NumberColumn("系統計算值", disabled=True),
+                    "理論可達上限":    st.column_config.NumberColumn("理論可達上限 📊", disabled=True,
+                                        help="排除 O/長假後，在勞基法（連五/孤立班）限制下估算的最高可上班天數。若低於「應上班天數」，建議手動調低目標。"),
+                    "應上班天數":      st.column_config.NumberColumn("應上班天數", min_value=0, max_value=st.session_state.month_days, step=1),
                 },
                 hide_index=True, use_container_width=True, key="edit_targets_step2"
             )
@@ -2517,9 +2572,10 @@ if st.session_state.step >= 5:
                                     continue
                         # ── 補足 Pass 1：D班 / 12-8 每日配額上限檢查 ──
                         # 假日：嚴格遵守配額上限（假日人力有限）
-                        # 平日：D班配額為最低需求，允許超額補足個人應上班天數，不強制截止
+                        # 平日：允許超出配額最多 3 人的緩衝（幫助欠班護理師補足），超過緩衝才截止
                         _row_q_p1 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                         _is_hol_p1 = d_int in _hol_set5
+                        _D_WEEKDAY_BUFFER = 3  # 平日D班每日最多允許超出配額的人數緩衝
                         if not _row_q_p1.empty:
                             try:
                                 if eff_s5 == "D":
@@ -2530,9 +2586,10 @@ if st.session_state.step >= 5:
                                             if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
                                             and cache_title[i] not in NO_HOL_ADMIN
                                         )
-                                        if _curr_p1 >= _req_p1 and _is_hol_p1:
-                                            continue  # 假日嚴守上限
-                                        # 平日：即使超過配額最低需求，仍允許補足個人目標
+                                        if _is_hol_p1:
+                                            if _curr_p1 >= _req_p1: continue  # 假日嚴守上限
+                                        else:
+                                            if _curr_p1 >= _req_p1 + _D_WEEKDAY_BUFFER: continue  # 平日允許超出最多3人
                                 elif eff_s5 == "12-8":
                                     _req_p1 = int(_row_q_p1.iloc[0]["12-8"])
                                     _curr_p1 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -2612,9 +2669,10 @@ if st.session_state.step >= 5:
                                 # 包班人員不改排白班，直接跳過
                                 continue
                     # ── 補足 Pass 2：D班 / 12-8 每日配額上限檢查 ──
-                    # 假日：嚴格遵守配額上限；平日：允許超額補足個人應上班天數
+                    # 假日：嚴格遵守配額上限；平日：允許超出配額最多 3 人的緩衝
                     _row_q_p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                     _is_hol_p2 = d_int in _hol_set_f5
+                    _D_WEEKDAY_BUFFER_P2 = 3  # 平日D班每日最多允許超出配額的人數緩衝
                     if not _row_q_p2.empty:
                         try:
                             if eff_sf == "D":
@@ -2625,8 +2683,10 @@ if st.session_state.step >= 5:
                                         if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
                                         and cache_title[i] not in NO_HOL_ADMIN
                                     )
-                                    if _curr_p2 >= _req_p2 and _is_hol_p2:
-                                        continue  # 假日嚴守上限；平日允許超額補足
+                                    if _is_hol_p2:
+                                        if _curr_p2 >= _req_p2: continue  # 假日嚴守上限
+                                    else:
+                                        if _curr_p2 >= _req_p2 + _D_WEEKDAY_BUFFER_P2: continue  # 平日允許超出最多3人
                             elif eff_sf == "12-8":
                                 _req_p2 = int(_row_q_p2.iloc[0]["12-8"])
                                 _curr_p2 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
