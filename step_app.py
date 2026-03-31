@@ -2918,10 +2918,12 @@ if st.session_state.step >= 5:
                         if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
                         if sched[n_idx][d_int] != "": continue
                         # 配額上限（嚴守，不使用緩衝）
+                        # 注意：12-8 的欄位名稱為 "12-8"，E/N 為 "E班"/"N班"
                         _rq_p3 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                         if not _rq_p3.empty:
                             try:
-                                _req3 = int(_rq_p3.iloc[0][f"{_s3}班"])
+                                _col3 = {"E": "E班", "N": "N班", "12-8": "12-8"}.get(_s3, f"{_s3}班")
+                                _req3 = int(_rq_p3.iloc[0][_col3])
                                 _cur3 = sum(1 for i in ai_df.index if sched[i][d_int] == _s3)
                                 if _cur3 >= _req3: continue
                             except (KeyError, ValueError): pass
