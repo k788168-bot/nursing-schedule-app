@@ -14,8 +14,10 @@ st.set_page_config(page_title="層級式護理排班系統", layout="wide")
 # ── 行政職稱常數 ──────────────────────────────────────────────
 # 只排白班（D）的職稱
 ADMIN_TITLES  = {"組長", "護理長", "副護理長", "助理", "傷兵"}
-# 同上，且完全不排假日班（週六/週日/國定）、不排夜班、不排加班線
+# 不排假日班（週六/週日/國定）、不排夜班、不排加班線；且不計入單位人力
 NO_HOL_ADMIN  = {"護理長", "副護理長", "助理", "傷兵"}
+# 不排假日班（含組長）；組長仍計入單位人力，故使用獨立常數
+NO_HOL_SET    = {"護理長", "副護理長", "助理", "傷兵", "組長"}
 # 包班人員包班班別下限（達到後，人力額滿時可改排其他班別）
 PACK_MIN_SHIFTS = 15
 
@@ -252,15 +254,22 @@ def can_work_holiday_check(n_idx, d_int, cache_can_sat, cache_can_sun, cache_can
     # 無假日能力
     return False
 
-def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None):
+def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None, target_off=None):
     """
     計算個人額外扣除的休假天數。
-    規則：
-      - 預休日期 (O)          → 已包含在當月應休天數內，不另外扣除
-      - 預約長假 / 特殊假別   → 只有落在「平日（非六日非國定）」時，才視為額外休假並扣除工作天數
-                                落在週六、週日、國定假日時，不額外扣除（原本就是休息日）
+
+    ── target_off 傳入時（新邏輯）─────────────────────────────────────────────
+      ① 預休日期 (O) + 預約長假日期 → 先共同佔用 target_off 應休天數；
+         只有超出 target_off 的部分才額外扣減工作天數。
+      ② 特殊假別（病假、事假、公假、喪假等）→ 一律直接扣減工作天數。
+      ③ 以上所有假別，只有「平日（非六日非國定）」才計入扣減。
+      回傳值 = max(0, 預休平日 + 長假平日 − target_off) + 特殊假別平日
+
+    ── target_off=None 時（舊邏輯，向下相容）──────────────────────────────────
+      - 預休日期 (O) → 不扣（已包含在應休天數，向下相容）
+      - 預約長假 + 特殊假別 → 只有平日才扣工作天數
+
     sat_set / sun_set / nat_set: 該月的週六、週日、國定假日日期集合（int）
-    若未傳入，舊版行為（全部計算）維持不變。
     """
     hol_set = set()
     if sat_set: hol_set |= set(sat_set)
@@ -271,30 +280,55 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None)
         """True = 平日（需計算額外休假）"""
         return d_int not in hol_set if hol_set else True
 
-    extra = 0
-
-    # 預約長假日期（每個合法平日算一天）
-    long_leave_str = str(row.get("預約長假日期", "")).strip()
-    if long_leave_str:
-        extra += sum(
-            1 for d in long_leave_str.split(",")
-            if d.strip().isdigit()
-            and 1 <= int(d.strip()) <= month_days
-            and is_weekday(int(d.strip()))
-        )
-
-    # 特殊假別（格式為 "日期:假別" 或 "日期-假別"，每筆平日算一天）
+    # ── 特殊假別（各種假別一律直接扣工作天數）──────────────────────────────
+    special_leave_days = 0
     sp_str = str(row.get("特殊假別", "")).strip()
     if sp_str:
         for item in sp_str.split(","):
             sep = ":" if ":" in item else "-"
             parts = item.split(sep, 1)
             if len(parts) >= 1 and parts[0].strip().isdigit():
-                d_int = int(parts[0].strip())
-                if 1 <= d_int <= month_days and is_weekday(d_int):
-                    extra += 1
+                d_int_sp = int(parts[0].strip())
+                if 1 <= d_int_sp <= month_days and is_weekday(d_int_sp):
+                    special_leave_days += 1
 
-    return extra
+    if target_off is not None:
+        # ── 新邏輯：預休 + 長假先佔用 target_off，超出才扣工作天 ────────────
+        # 計算平日預休天數
+        pre_o_days = 0
+        pre_o_str = str(row.get("預休日期", "")).strip()
+        if pre_o_str:
+            pre_o_days = sum(
+                1 for d in pre_o_str.split(",")
+                if d.strip().isdigit()
+                and 1 <= int(d.strip()) <= month_days
+                and is_weekday(int(d.strip()))
+            )
+        # 計算平日長假天數
+        long_leave_days = 0
+        long_leave_str = str(row.get("預約長假日期", "")).strip()
+        if long_leave_str:
+            long_leave_days = sum(
+                1 for d in long_leave_str.split(",")
+                if d.strip().isdigit()
+                and 1 <= int(d.strip()) <= month_days
+                and is_weekday(int(d.strip()))
+            )
+        # 超出應休天數的部分才算額外扣減
+        excess_rest = max(0, pre_o_days + long_leave_days - target_off)
+        return excess_rest + special_leave_days
+    else:
+        # ── 舊邏輯（向下相容）：O 不扣，長假 + 特殊假別才扣 ─────────────────
+        long_leave_days = 0
+        long_leave_str = str(row.get("預約長假日期", "")).strip()
+        if long_leave_str:
+            long_leave_days = sum(
+                1 for d in long_leave_str.split(",")
+                if d.strip().isdigit()
+                and 1 <= int(d.strip()) <= month_days
+                and is_weekday(int(d.strip()))
+            )
+        return long_leave_days + special_leave_days
 
 # ============================================================
 # 🎨 直接用 openpyxl 寫入顏色的彩色排班表匯出函數
@@ -1024,7 +1058,8 @@ if st.session_state.step >= 2:
                 _ctitle = str(_cr.get("職稱", "")).strip()
                 if _ctitle in NO_HOL_ADMIN:
                     continue   # 護理長/副護理長不計
-                _cel = calc_extra_leaves(_cr, _month_days_s, _scan_sat, _scan_sun, _scan_nat)
+                _cel = calc_extra_leaves(_cr, _month_days_s, _scan_sat, _scan_sun, _scan_nat,
+                                         target_off=st.session_state.target_off)
                 _ctgt = max(0, _month_days_s - st.session_state.target_off - _cel)
                 _cap_total += _ctgt
                 _is_exempt = _ci in _scan_night_exempt
@@ -1108,22 +1143,33 @@ if st.session_state.step >= 2:
             # ── 應上班天數確認表（可手動修改）────────────────────────
             st.write("#### 📋 確認每人本月應上班天數（可直接修改）")
             st.caption(
-                "計算公式：當月天數 − 計畫休假天數 − 平日特殊/長假天數。"
+                "計算公式：當月天數 − 計畫休假天數 − 額外扣減天數。"
+                "額外扣減 = 預休(O)+長假超出計畫休假的部分 + 特殊假別（病假/事假/公假/喪假等）。"
                 "如有特殊情況（如長期停班、特殊協議），可在「應上班天數」欄直接調整。"
             )
             _targets_data = []
+            _scan_hol_set_days = set(_scan_sat) | set(_scan_sun) | set(_scan_nat)
+            _scan_weekday_count = sum(1 for d in range(1, st.session_state.month_days + 1)
+                                      if d not in _scan_hol_set_days)
+            _toff_scan = st.session_state.target_off
             for idx, row in ai_df.iterrows():
-                _el = calc_extra_leaves(row, st.session_state.month_days,
-                                        _scan_sat, _scan_sun, _scan_nat)
-                _calc_t = max(0, st.session_state.month_days - st.session_state.target_off - _el)
+                _title_scan = str(row.get("職稱", "")).strip()
+                if _title_scan in NO_HOL_ADMIN:
+                    _el = calc_extra_leaves(row, st.session_state.month_days,
+                                            _scan_sat, _scan_sun, _scan_nat, target_off=0)
+                    _calc_t = max(0, _scan_weekday_count - _el)
+                else:
+                    _el = calc_extra_leaves(row, st.session_state.month_days,
+                                            _scan_sat, _scan_sun, _scan_nat, target_off=_toff_scan)
+                    _calc_t = max(0, st.session_state.month_days - _toff_scan - _el)
                 # 若已有手動調整，顯示調整後的值
                 _prev = (st.session_state.custom_targets or {}).get(idx, _calc_t)
                 _targets_data.append({
                     "姓名":         row["姓名"],
-                    "職稱":         str(row.get("職稱", "")).strip(),
+                    "職稱":         _title_scan,
                     "當月天數":     st.session_state.month_days,
-                    "計畫休假":     st.session_state.target_off,
-                    "平日特殊/長假":_el,
+                    "計畫休假":     _toff_scan,
+                    "額外扣減":     _el,
                     "系統計算值":   _calc_t,
                     "應上班天數":   _prev,
                 })
@@ -1134,7 +1180,7 @@ if st.session_state.step >= 2:
                     "職稱":          st.column_config.TextColumn("職稱", disabled=True),
                     "當月天數":      st.column_config.NumberColumn("當月天數", disabled=True),
                     "計畫休假":      st.column_config.NumberColumn("計畫休假", disabled=True),
-                    "平日特殊/長假": st.column_config.NumberColumn("平日特殊/長假", disabled=True),
+                    "額外扣減":      st.column_config.NumberColumn("額外扣減", disabled=True),
                     "系統計算值":    st.column_config.NumberColumn("系統計算值", disabled=True),
                     "應上班天數":    st.column_config.NumberColumn("應上班天數", min_value=0, max_value=st.session_state.month_days, step=1),
                 },
@@ -1297,9 +1343,11 @@ if st.session_state.step >= 3:
                         PACK_MIN_SHIFTS = 15
 
                         # 預先建立每位包班人員的 max_target 快取
+                        _toff3 = st.session_state.target_off
                         def get_max_target3(idx, row):
-                            el = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
-                            mt = month_days - st.session_state.target_off - el
+                            el = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                   target_off=_toff3)
+                            mt = month_days - _toff3 - el
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 mt = st.session_state.custom_targets[idx]
                             return mt
@@ -1400,8 +1448,9 @@ if st.session_state.step >= 3:
                             if pref == "": continue
                             pref_s = get_pref_s(pref)
 
-                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
-                            max_target = month_days - st.session_state.target_off - extra_leaves
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                              target_off=_toff3)
+                            max_target = month_days - _toff3 - extra_leaves
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)  # 不超過應上班天數
@@ -1423,8 +1472,9 @@ if st.session_state.step >= 3:
                             pref  = cache_pref[idx]
                             if pref == "": return None
                             ps    = get_pref_s(pref)
-                            el    = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
-                            mt    = month_days - st.session_state.target_off - el
+                            el    = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                      target_off=_toff3)
+                            mt    = month_days - _toff3 - el
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 mt = st.session_state.custom_targets[idx]
                             mp    = min(PACK_MIN_SHIFTS, mt)
@@ -1523,8 +1573,9 @@ if st.session_state.step >= 3:
                             pref_s = get_pref_s(pref)
                             if pref_s not in ("E", "N"): continue  # 僅適用 E/N 包班護士
 
-                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
-                            max_target = month_days - st.session_state.target_off - extra_leaves
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                              target_off=_toff3)
+                            max_target = month_days - _toff3 - extra_leaves
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
@@ -1549,8 +1600,9 @@ if st.session_state.step >= 3:
                             pref = cache_pref[idx]
                             if pref == "": continue
                             pref_s = get_pref_s(pref)
-                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3)
-                            max_target = month_days - st.session_state.target_off - extra_leaves
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                              target_off=_toff3)
+                            max_target = month_days - _toff3 - extra_leaves
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
@@ -1685,9 +1737,20 @@ if st.session_state.step >= 4:
                     nat_list4 = st.session_state.nat_holidays_list
 
                     personal_targets = {}
+                    _hol_set4 = set(sat_list4) | set(sun_list4) | set(nat_list4)
+                    _weekday_count4 = sum(1 for d in range(1, month_days + 1) if d not in _hol_set4)
+                    _toff4 = st.session_state.target_off
                     for idx, row in ai_df.iterrows():
-                        extra_leaves = calc_extra_leaves(row, month_days, sat_list4, sun_list4, nat_list4)
-                        personal_targets[idx] = max(0, month_days - st.session_state.target_off - extra_leaves)
+                        _title4 = str(row.get("職稱", "")).strip()
+                        if _title4 in NO_HOL_ADMIN:
+                            # 副護理長/護理長/助理/傷兵：平日全上；預休/長假/特假均直接扣平日
+                            # target_off=0 → 所有平日假別（O+長假+特假）都算扣減
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list4, sun_list4, nat_list4, target_off=0)
+                            personal_targets[idx] = max(0, _weekday_count4 - extra_leaves)
+                        else:
+                            # 一般護理師：O+長假先佔用 target_off，超出才扣工作天；特假直接扣
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list4, sun_list4, nat_list4, target_off=_toff4)
+                            personal_targets[idx] = max(0, month_days - _toff4 - extra_leaves)
                     # 套用手動調整的應上班天數
                     if st.session_state.custom_targets:
                         for idx in ai_df.index:
@@ -1700,7 +1763,7 @@ if st.session_state.step >= 4:
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
                         # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                         if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4, sat_list4, sun_list4, nat_list4): return False
-                        if cache_preg[n_idx]: return False
+                        if cache_preg[n_idx] and s in ("E", "N"): return False  # 母性保護僅禁 E/N；12-8 仍可排
                         if cache_title[n_idx] in ADMIN_TITLES: return False
 
                         if str(d_int) in class_days_map.get(n_idx, []):
@@ -1950,14 +2013,18 @@ if st.session_state.step >= 5:
             personal_targets = {}
             _hol_set5 = set(sat_list5) | set(sun_list5) | set(nat_list5)
             _weekday_count5 = sum(1 for d in range(1, month_days + 1) if d not in _hol_set5)
+            _toff5 = st.session_state.target_off
             for idx, row in ai_df.iterrows():
                 title_idx = str(row.get("職稱", "")).strip()
-                extra_leaves = calc_extra_leaves(row, month_days, sat_list5, sun_list5, nat_list5)
                 if title_idx in NO_HOL_ADMIN:
-                    # 護理長/副護理長只排平日白班：工作目標 = 平日天數 - 計畫休假
-                    personal_targets[idx] = max(0, _weekday_count5 - st.session_state.target_off - extra_leaves)
+                    # 副護理長/護理長/助理/傷兵：平日全上；預休/長假/特假均直接扣平日
+                    # target_off=0 → 所有平日假別（O+長假+特假）都算扣減
+                    extra_leaves = calc_extra_leaves(row, month_days, sat_list5, sun_list5, nat_list5, target_off=0)
+                    personal_targets[idx] = max(0, _weekday_count5 - extra_leaves)
                 else:
-                    personal_targets[idx] = max(0, month_days - st.session_state.target_off - extra_leaves)
+                    # 一般護理師（含組長）：O+長假先佔用 target_off，超出才扣工作天；特假直接扣
+                    extra_leaves = calc_extra_leaves(row, month_days, sat_list5, sun_list5, nat_list5, target_off=_toff5)
+                    personal_targets[idx] = max(0, month_days - _toff5 - extra_leaves)
             # 套用手動調整的應上班天數
             if st.session_state.custom_targets:
                 for idx in ai_df.index:
@@ -1972,8 +2039,8 @@ if st.session_state.step >= 5:
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
                 # 行政職稱（組長/護理長/副護理長）只能上白班
                 if cache_title[n_idx] in ADMIN_TITLES and s != "D": return False
-                # 護理長/副護理長：行政班，完全不排假日班
-                if cache_title[n_idx] in NO_HOL_ADMIN and d_int in set(sat_list5) | set(sun_list5) | set(nat_list5): return False
+                # 護理長/副護理長/組長：行政班，完全不排假日班
+                if cache_title[n_idx] in NO_HOL_SET and d_int in set(sat_list5) | set(sun_list5) | set(nat_list5): return False
                 # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                 if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5, cache_can_nat5, sat_list5, sun_list5, nat_list5): return False
                 if str(d_int) in class_days_map.get(n_idx, []) and s != "D": return False
@@ -2412,17 +2479,20 @@ if st.session_state.step >= 5:
                                     # 包班人員不改排白班，直接跳過
                                     continue
                         # ── 補足 Pass 1：D班 / 12-8 每日配額上限檢查（避免超出人力配額）──
+                        # NO_HOL_ADMIN 不計入單位人力，不受 D班配額限制；配額計數也排除 NO_HOL_ADMIN
                         _row_q_p1 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                         if not _row_q_p1.empty:
                             try:
                                 if eff_s5 == "D":
-                                    _req_p1 = int(_row_q_p1.iloc[0]["D班"])
-                                    _curr_p1 = sum(
-                                        1 for i in ai_df.index
-                                        if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
-                                    )
-                                    if _curr_p1 >= _req_p1:
-                                        continue
+                                    if cache_title[n_idx] not in NO_HOL_ADMIN:
+                                        _req_p1 = int(_row_q_p1.iloc[0]["D班"])
+                                        _curr_p1 = sum(
+                                            1 for i in ai_df.index
+                                            if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
+                                            and cache_title[i] not in NO_HOL_ADMIN
+                                        )
+                                        if _curr_p1 >= _req_p1:
+                                            continue
                                 elif eff_s5 == "12-8":
                                     _req_p1 = int(_row_q_p1.iloc[0]["12-8"])
                                     _curr_p1 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -2443,7 +2513,7 @@ if st.session_state.step >= 5:
                 """補足 Pass 2：完全遵守勞基法（連五/14日窗口）及 E/N 配額上限"""
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
                 if cache_title[n_idx] in ADMIN_TITLES and s != "D": return False
-                if cache_title[n_idx] in NO_HOL_ADMIN and d_int in _hol_set_f5: return False
+                if cache_title[n_idx] in NO_HOL_SET and d_int in _hol_set_f5: return False
                 # 包班人員有假日出勤義務，不受假日資格限制
                 if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5,
                         cache_can_nat5, sat_list5, sun_list5, nat_list5): return False
@@ -2502,17 +2572,20 @@ if st.session_state.step >= 5:
                                 # 包班人員不改排白班，直接跳過
                                 continue
                     # ── 補足 Pass 2：D班 / 12-8 每日配額上限檢查（避免超出人力配額）──
+                    # NO_HOL_ADMIN 不計入單位人力，不受 D班配額限制；配額計數也排除 NO_HOL_ADMIN
                     _row_q_p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                     if not _row_q_p2.empty:
                         try:
                             if eff_sf == "D":
-                                _req_p2 = int(_row_q_p2.iloc[0]["D班"])
-                                _curr_p2 = sum(
-                                    1 for i in ai_df.index
-                                    if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
-                                )
-                                if _curr_p2 >= _req_p2:
-                                    continue
+                                if cache_title[n_idx] not in NO_HOL_ADMIN:
+                                    _req_p2 = int(_row_q_p2.iloc[0]["D班"])
+                                    _curr_p2 = sum(
+                                        1 for i in ai_df.index
+                                        if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
+                                        and cache_title[i] not in NO_HOL_ADMIN
+                                    )
+                                    if _curr_p2 >= _req_p2:
+                                        continue
                             elif eff_sf == "12-8":
                                 _req_p2 = int(_row_q_p2.iloc[0]["12-8"])
                                 _curr_p2 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -2559,7 +2632,10 @@ if st.session_state.step >= 5:
                 """對指定人員集合執行假日出勤均等化（支援 D/E/N/12-8 所有班別互換）"""
                 if not pool_set: return
                 for _hit in range(500):
-                    _hc = {i: sum(1 for hd in _hol_day_set if is_work(sched[i][hd]))
+                    # 計算有效假日消耗數：實際出勤 + 特殊假別（公假/喪假/病假等）均視為「已消耗」
+                    # 目的：避免因特殊假別而讓護理師在均等化中被誤認為「假日出勤不足」
+                    _hc = {i: sum(1 for hd in _hol_day_set
+                                  if sched[i][hd] not in ("", "O"))
                            for i in pool_set}
                     if not _hc: break
                     _hmax = max(_hc.values())
@@ -2808,11 +2884,12 @@ if st.session_state.step >= 6:
                     _fill_s = "D"
                 for d_int in range(1, month_days + 1):
                     if sched[n_idx][d_int] != "": continue
-                    # 護理長/副護理長：行政班，不填假日格
-                    if cache_title[n_idx] in NO_HOL_ADMIN and d_int in set(sat_list6) | set(sun_list6) | set(nat_list6): continue
+                    # 護理長/副護理長/組長：行政班，不填假日格
+                    if cache_title[n_idx] in NO_HOL_SET and d_int in set(sat_list6) | set(sun_list6) | set(nat_list6): continue
                     worked_now = sum(1 for x in sched[n_idx] if is_work(x))
                     if worked_now >= personal_targets[n_idx]: break
                     # 每日配額上限檢查（E/N/D/12-8 全部班別）
+                    # NO_HOL_ADMIN 不計入單位人力，不受 D班配額限制；配額計數也排除 NO_HOL_ADMIN
                     eff_fill6 = _fill_s
                     _row_q6 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                     if not _row_q6.empty:
@@ -2823,11 +2900,13 @@ if st.session_state.step >= 6:
                                 if _curr6 >= _req6:
                                     continue  # 包班人員不改排白班，直接跳過
                             elif eff_fill6 == "D":
-                                _req6 = int(_row_q6.iloc[0]["D班"])
-                                _curr6 = sum(1 for i in ai_df.index
-                                             if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D"))
-                                if _curr6 >= _req6:
-                                    continue
+                                if cache_title[n_idx] not in NO_HOL_ADMIN:
+                                    _req6 = int(_row_q6.iloc[0]["D班"])
+                                    _curr6 = sum(1 for i in ai_df.index
+                                                 if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
+                                                 and cache_title[i] not in NO_HOL_ADMIN)
+                                    if _curr6 >= _req6:
+                                        continue
                             elif eff_fill6 == "12-8":
                                 _req6 = int(_row_q6.iloc[0]["12-8"])
                                 _curr6 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -3011,7 +3090,10 @@ if st.session_state.step >= 6:
 
             # ── 公平性診斷報告 ─────────────────────────────────────────
             explanation_data = []
-            max_target = max(personal_targets.values()) if personal_targets else 20
+            # max_target 只取常規人員（排除 NO_HOL_ADMIN 的平日全上目標，避免誤標一般護理師「請假較多」）
+            _regular_targets = [personal_targets[i] for i in ai_df.index
+                                 if str(ai_df.at[i, "職稱"]).strip() not in NO_HOL_ADMIN]
+            max_target = max(_regular_targets) if _regular_targets else 20
             for idx, row in ai_df.iterrows():
                 name        = row["姓名"]
                 title       = str(row["職稱"]).strip()
@@ -3024,9 +3106,9 @@ if st.session_state.step >= 6:
                         reasons.append(f"行政職({title})：僅排平日白班，不參與假日班輪替，亦不排加班線。")
                     else:
                         reasons.append(f"管理職({title})：不參與常規夜班與假日班輪替；加班天數與其他同仁一致，線位在組長群中互相均分。")
-                if is_protected:     reasons.append("母性保護：依法規絕對禁止安排夜班(E/N/12-8)。")
+                if is_protected:     reasons.append("母性保護：依法規禁止安排小夜班(E)及大夜班(N)；12-8 中班可正常排入。")
                 if pref_raw != "":   reasons.append(f"包班人員({pref_raw})：優先保障其專屬班別達標，極少數落差係受「連五/14休2防護」或「預休衝堂」擠壓。")
-                if target < max_target:
+                if title not in NO_HOL_ADMIN and target < max_target:
                     reasons.append(f"請假天數較多：本月依法應上班僅 {target} 天 (全滿為 {max_target} 天)。在「最高連五天」及「11小時休息」限制下，產生了數學極限落差。")
                 if not reasons:
                     reasons.append("常規人力：數據已受 AI 強制追平，若有1天內之微小差距，屬勞基法防護所產生之數學必然結果。")
@@ -3069,7 +3151,7 @@ if st.session_state.step >= 6:
         for idx, row in ai_df.iterrows():
             _title_s     = str(row["職稱"]).strip()
             is_leader    = _title_s in ADMIN_TITLES
-            is_no_hol    = _title_s in NO_HOL_ADMIN   # 護理長/副護理長：獨立計算，不參與加班/假日分配
+            is_no_hol    = _title_s in NO_HOL_SET   # 護理長/副護理長/組長：不參與假日/夜班分配
             pref_raw     = str(row["包班意願"]).strip()
             pref_norm    = "N" if "大夜" in pref_raw else ("E" if "小夜" in pref_raw else ("12-8" if "中" in pref_raw else ""))
             is_protected = str(row["孕/育嬰免夜班"]).strip() == "是"
