@@ -3170,6 +3170,15 @@ if st.session_state.step >= 6:
         _view_df = _display_df.copy()
         for _c in _day_cols:
             _view_df[_c] = _view_df[_c].apply(abbrev_display)
+        # 預白班：D 格標為 Dx（視覺區分預排白班）
+        for _pw_ri, (_, _pw_row) in enumerate(ai_df.iterrows()):
+            for _pw_ds in str(_pw_row.get("預白日期", "")).split(","):
+                if _pw_ds.strip().isdigit():
+                    _pw_d = int(_pw_ds.strip())
+                    if 1 <= _pw_d <= month_days:
+                        _pw_col = str(_pw_d)
+                        if _pw_col in _view_df.columns and str(_view_df.iat[_pw_ri, _view_df.columns.get_loc(_pw_col)]).strip() == "D":
+                            _view_df.iat[_pw_ri, _view_df.columns.get_loc(_pw_col)] = "Dx"
         styled_final_df = _view_df.style.map(color_shifts, subset=_day_cols)
 
         stats = []
@@ -3268,8 +3277,18 @@ if st.session_state.step >= 6:
             st.write("##### 違規明細")
             st.dataframe(violation_df, use_container_width=True)
 
+        # 預白班：建立 Dx 標記版副本供 Excel 匯出使用
+        _export_sched6 = st.session_state.final_sched.copy()
+        for _pw6_ri, (_, _pw6_row) in enumerate(ai_df.iterrows()):
+            for _pw6_ds in str(_pw6_row.get("預白日期", "")).split(","):
+                if _pw6_ds.strip().isdigit():
+                    _pw6_d = int(_pw6_ds.strip())
+                    if 1 <= _pw6_d <= month_days:
+                        _pw6_col = str(_pw6_d)
+                        if _pw6_col in _export_sched6.columns and str(_export_sched6.iat[_pw6_ri, _export_sched6.columns.get_loc(_pw6_col)]).strip() == "D":
+                            _export_sched6.iat[_pw6_ri, _export_sched6.columns.get_loc(_pw6_col)] = "Dx"
         output = build_colored_excel(
-            st.session_state.final_sched,
+            _export_sched6,
             stats_df,
             st.session_state.explanation_df,
             shortages_export,
@@ -3323,8 +3342,8 @@ if st.session_state.step >= 7:
             src = st.session_state.final_sched.copy()
             classified = src.copy()
 
-            # 從 ai_df 重建 pre_type_map：知道哪些 O 是「預假」，哪些是「預長假」
-            pre_type_map7 = {}  # (row_i, d) -> "預假" or "預長假"
+            # 從 ai_df 重建 pre_type_map：知道哪些 O 是「預假」，哪些是「預長假」，哪些 D 是「預白」
+            pre_type_map7 = {}  # (row_i, d) -> "預假" | "預長假" | "預白"
             for row_i7, (idx7, row7) in enumerate(ai_df.iterrows()):
                 for d_str in str(row7.get("預休日期", "")).split(","):
                     if d_str.strip().isdigit() and 1 <= int(d_str.strip()) <= month_days:
@@ -3332,6 +3351,9 @@ if st.session_state.step >= 7:
                 for d_str in str(row7.get("預約長假日期", "")).split(","):
                     if d_str.strip().isdigit() and 1 <= int(d_str.strip()) <= month_days:
                         pre_type_map7[(row_i7, int(d_str.strip()))] = "預長假"
+                for d_str in str(row7.get("預白日期", "")).split(","):
+                    if d_str.strip().isdigit() and 1 <= int(d_str.strip()) <= month_days:
+                        pre_type_map7[(row_i7, int(d_str.strip()))] = "預白"
 
             for row_i in range(len(ai_df)):
                 week_has_jiqi = {}
@@ -3354,7 +3376,11 @@ if st.session_state.step >= 7:
                     cidx = classified.columns.get_loc(col)
                     cell = str(classified.iat[row_i, cidx]).strip()
 
-                    if is_work(cell): continue  # 上班班別不動
+                    if is_work(cell):
+                        # 預白班：D 格保留 Dx 特徵顯示
+                        if cell == "D" and pre_type_map7.get((row_i, d)) == "預白":
+                            classified.iat[row_i, cidx] = "Dx"
+                        continue  # 上班班別不動
 
                     w = (first_wday + d - 1) // 7
                     if d in nat_set:
