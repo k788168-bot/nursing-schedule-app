@@ -1979,9 +1979,107 @@ if st.session_state.step >= 4:
                                     break
                                 if not progress: break  # 本輪無任何進展，提前結束
 
-                    for s_t in ["N", "E"]: 
+                    for s_t in ["N", "E"]:
                         assign_night_shifts(s_t)
-                        
+
+                    # ── E/N 事後均等化（保證均等池內夜班差距 ≤ 1）─────────────
+                    # 策略一（優先）：四格互換 — over[X]=E/N→"", under[X]=""→E/N,
+                    #                            under[Y]=D→"",  over[Y]=""→D
+                    # 策略二（備用）：單格轉讓 — 僅在 under 仍低於 personal_targets 時使用
+                    _il4_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+
+                    def _can_en_nocheck4(n_idx, s, d_int):
+                        """d_int 可合法排 E 或 N（不含 personal_targets 上限，適用互換）"""
+                        if sched[n_idx][d_int] not in ["", "上課"]: return False
+                        if cache_preg[n_idx] and s in ("E", "N"): return False
+                        qual4 = cache_night[n_idx]
+                        if s == "N" and qual4 != "大夜": return False
+                        if s == "E" and qual4 not in ("大夜", "小夜"): return False
+                        if not can_work_holiday_check(n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4, sat_list4, sun_list4, nat_list4): return False
+                        _y4e = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                        _t4e = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        _yb4e = "D" if (_y4e.startswith("D") or _y4e in ("上課","公差")) else _y4e
+                        _tb4e = "D" if (_t4e.startswith("D") or _t4e in ("上課","公差")) else _t4e
+                        if is_work(_y4e) and s in _il4_eq.get(_yb4e, []): return False
+                        if is_work(_t4e) and _tb4e in _il4_eq.get(s, []): return False
+                        _sc4e = 1
+                        for _bd4 in range(d_int - 1, 0, -1):
+                            if is_work(sched[n_idx][_bd4]): _sc4e += 1
+                            else: break
+                        for _fd4 in range(d_int + 1, month_days + 1):
+                            if is_work(sched[n_idx][_fd4]): _sc4e += 1
+                            else: break
+                        if _sc4e > 5: return False
+                        return True
+
+                    def _can_D_nocheck4(n_idx, d_int):
+                        """d_int 可合法排 D（不含 personal_targets 上限，適用互換）"""
+                        if sched[n_idx][d_int] not in ["", "上課"]: return False
+                        _y4d = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                        _t4d = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        _yb4d = "D" if (_y4d.startswith("D") or _y4d in ("上課","公差")) else _y4d
+                        _tb4d = "D" if (_t4d.startswith("D") or _t4d in ("上課","公差")) else _t4d
+                        if is_work(_y4d) and "D" in _il4_eq.get(_yb4d, []): return False
+                        if is_work(_t4d) and _tb4d in _il4_eq.get("D", []): return False
+                        _sc4d = 1
+                        for _bd4 in range(d_int - 1, 0, -1):
+                            if is_work(sched[n_idx][_bd4]): _sc4d += 1
+                            else: break
+                        for _fd4 in range(d_int + 1, month_days + 1):
+                            if is_work(sched[n_idx][_fd4]): _sc4d += 1
+                            else: break
+                        if _sc4d > 5: return False
+                        return True
+
+                    _en_elig_set4 = set(elig_night_nurses)  # 非包班、非孕育嬰、具大/小夜資格
+
+                    for _nit4 in range(500):
+                        _nc4 = {i: sum(1 for v in sched[i] if v in ("E", "N"))
+                                for i in _en_elig_set4}
+                        if not _nc4: break
+                        _nmax4 = max(_nc4.values())
+                        _nmin4 = min(_nc4.values())
+                        if _nmax4 - _nmin4 <= 1: break
+
+                        _over_l4  = [i for i, c in _nc4.items() if c == _nmax4]
+                        _under_l4 = [i for i, c in _nc4.items() if c == _nmin4]
+
+                        _swapped4 = False
+                        for _ov4 in _over_l4:
+                            if _swapped4: break
+                            for _un4 in _under_l4:
+                                if _swapped4: break
+                                for _d4 in range(1, month_days + 1):
+                                    if _swapped4: break
+                                    _ov_shift4 = sched[_ov4][_d4]
+                                    if _ov_shift4 not in ("E", "N"): continue
+                                    if sched[_un4][_d4] not in ("", "上課"): continue
+                                    if not _can_en_nocheck4(_un4, _ov_shift4, _d4): continue
+
+                                    # ── 策略一：四格互換（兩人總班數不變）──────
+                                    _four4 = False
+                                    for _wd4 in range(1, month_days + 1):
+                                        if _wd4 == _d4: continue
+                                        if sched[_un4][_wd4] != "D": continue
+                                        if not _can_D_nocheck4(_ov4, _wd4): continue
+                                        sched[_ov4][_d4] = ""
+                                        sched[_un4][_d4] = _ov_shift4
+                                        sched[_un4][_wd4] = ""
+                                        sched[_ov4][_wd4] = "D"
+                                        _swapped4 = True
+                                        _four4 = True
+                                        break
+
+                                    # ── 策略二：單格轉讓（under 仍低於目標時備用）──
+                                    if not _four4:
+                                        if sum(1 for x in sched[_un4] if is_work(x)) < personal_targets.get(_un4, 0):
+                                            sched[_ov4][_d4] = ""
+                                            sched[_un4][_d4] = _ov_shift4
+                                            _swapped4 = True
+
+                        if not _swapped4:
+                            break  # 找不到可交換組合，停止
+
                     night_df = pd.DataFrame({"姓名": ai_df["姓名"]})
                     for d in range(1, month_days + 1):
                         night_df[str(d)] = [sched[i][d] for i in ai_df.index]
