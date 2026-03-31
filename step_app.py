@@ -1268,6 +1268,15 @@ if st.session_state.step >= 2:
                 hide_index=True, use_container_width=True, key="edit_targets_step2"
             )
 
+            # ── 立即同步編輯結果到 session_state（每次重繪都更新，避免下次重繪時被舊值蓋掉）──
+            _custom_live = {}
+            for _trow in _targets_edit_df.itertuples(index=False):
+                _match = ai_df[ai_df["姓名"] == _trow.姓名].index
+                if len(_match) > 0:
+                    _custom_live[_match[0]] = max(0, int(_trow.應上班天數))
+            if _custom_live:
+                st.session_state.custom_targets = _custom_live
+
             col_btn1, col_btn2 = st.columns([1, 4])
             with col_btn1:
                 if st.button("⬅️ 回到第一步", type="secondary"):
@@ -1280,7 +1289,7 @@ if st.session_state.step >= 2:
                     st.session_state.skill_cols = temp_skills
                     st.session_state.edited_weekly_df = edited_weekly_df
                     st.session_state.edited_quota_df = edited_quota_df
-                    # 儲存手動調整後的應上班天數（以 DataFrame 索引為 key）
+                    # 儲存手動調整後的應上班天數（已由上方即時同步，此處確保最終寫入）
                     _custom = {}
                     for _trow in _targets_edit_df.itertuples(index=False):
                         _match = ai_df[ai_df["姓名"] == _trow.姓名].index
