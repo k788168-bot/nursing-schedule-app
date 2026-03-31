@@ -277,14 +277,15 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
     計算個人額外扣除的休假天數。
 
     ── target_off 傳入時（新邏輯）─────────────────────────────────────────────
-      ① 預休日期 (O) + 預約長假日期 → 先共同佔用 target_off 應休天數；
-         只有超出 target_off 的部分才額外扣減工作天數。
-      ② 特殊假別（病假、事假、公假、喪假等）→ 一律直接扣減工作天數。
-      ③ 以上所有假別，只有「平日（非六日非國定）」才計入扣減。
-      回傳值 = max(0, 預休平日 + 長假平日 − target_off) + 特殊假別平日
+      ① 預約長假日期 → 只有「平日」才扣一天應上班天數（假日跳過）。
+      ② 特殊假別（病假、事假、公假、喪假等）→ 不論平假日一律扣一天應上班天數。
+      ③ 預休日期（O）→ 一律不扣（已包含於 target_off 應休預算，對一般護理師無影響）。
+      ④ 例外（target_off == 0，即 NO_HOL_SET：護理長/組長等）：
+         這類人員無固定假日休假預算，其平日預休仍需扣除；
+         且假日公差可獲補休一天，抵消等量的平日O日扣減。
 
     ── target_off=None 時（舊邏輯，向下相容）──────────────────────────────────
-      - 預休日期 (O) → 不扣（已包含在應休天數，向下相容）
+      - 預休日期 (O) → 不扣
       - 預約長假 + 特殊假別 → 只有平日才扣工作天數
 
     sat_set / sun_set / nat_set: 該月的週六、週日、國定假日日期集合（int）
@@ -295,34 +296,24 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
     if nat_set: hol_set |= set(nat_set)
 
     def is_weekday(d_int):
-        """True = 平日（需計算額外休假）"""
+        """True = 平日（非六日非國定）"""
         return d_int not in hol_set if hol_set else True
 
-    # ── 特殊假別（各種假別一律直接扣工作天數）──────────────────────────────
-    special_leave_days = 0
-    sp_str = str(row.get("特殊假別", "")).strip()
-    if sp_str:
-        for item in sp_str.split(","):
-            sep = ":" if ":" in item else "-"
-            parts = item.split(sep, 1)
-            if len(parts) >= 1 and parts[0].strip().isdigit():
-                d_int_sp = int(parts[0].strip())
-                if 1 <= d_int_sp <= month_days and is_weekday(d_int_sp):
-                    special_leave_days += 1
-
     if target_off is not None:
-        # ── 新邏輯：預休 + 長假先佔用 target_off，超出才扣工作天 ────────────
-        # 計算平日預休天數
-        pre_o_days = 0
-        pre_o_str = str(row.get("預休日期", "")).strip()
-        if pre_o_str:
-            pre_o_days = sum(
-                1 for d in pre_o_str.split(",")
-                if d.strip().isdigit()
-                and 1 <= int(d.strip()) <= month_days
-                and is_weekday(int(d.strip()))
-            )
-        # 計算平日長假天數
+        # ── 新邏輯 ────────────────────────────────────────────────────────────
+        # ① 特殊假別：不論平假日一律扣
+        special_leave_days = 0
+        sp_str = str(row.get("特殊假別", "")).strip()
+        if sp_str:
+            for item in sp_str.split(","):
+                sep = ":" if ":" in item else "-"
+                parts = item.split(sep, 1)
+                if len(parts) >= 1 and parts[0].strip().isdigit():
+                    d_int_sp = int(parts[0].strip())
+                    if 1 <= d_int_sp <= month_days:   # 不過濾平假日
+                        special_leave_days += 1
+
+        # ② 長假：只有平日才扣
         long_leave_days = 0
         long_leave_str = str(row.get("預約長假日期", "")).strip()
         if long_leave_str:
@@ -332,13 +323,22 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
                 and 1 <= int(d.strip()) <= month_days
                 and is_weekday(int(d.strip()))
             )
-        # 超出應休天數的部分才算額外扣減
-        excess_rest = max(0, pre_o_days + long_leave_days - target_off)
 
-        # ── 假日公差補休抵扣（僅適用 NO_HOL_SET，即 target_off=0）────────────
-        # NO_HOL_SET（組長/護理長等）平時不排假日班；若假日出公差屬額外出勤，
-        # 依慣例可獲一天補休，抵消等量的平日O日扣減（每一假日公差抵一天）
         if target_off == 0:
+            # ── NO_HOL_SET（護理長/組長等，無固定假日預算）───────────────────
+            # 平日預休（O）仍需扣減
+            pre_o_days = 0
+            pre_o_str = str(row.get("預休日期", "")).strip()
+            if pre_o_str:
+                pre_o_days = sum(
+                    1 for d in pre_o_str.split(",")
+                    if d.strip().isdigit()
+                    and 1 <= int(d.strip()) <= month_days
+                    and is_weekday(int(d.strip()))
+                )
+            excess_rest = pre_o_days + long_leave_days
+
+            # 假日公差補休抵扣：假日出公差屬額外出勤，每一假日公差補休一天
             gongcha_str = str(row.get("公差日期", "")).strip()
             if gongcha_str:
                 gongcha_hol_credit = sum(
@@ -349,9 +349,23 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
                 )
                 excess_rest = max(0, excess_rest - gongcha_hol_credit)
 
-        return excess_rest + special_leave_days
+            return excess_rest + special_leave_days
+        else:
+            # ── 一般護理師：O 一律不扣，長假平日直接扣 ─────────────────────
+            return long_leave_days + special_leave_days
     else:
-        # ── 舊邏輯（向下相容）：O 不扣，長假 + 特殊假別才扣 ─────────────────
+        # ── 舊邏輯（向下相容）：O 不扣，長假 + 特殊假別只有平日才扣 ──────────
+        special_leave_days = 0
+        sp_str = str(row.get("特殊假別", "")).strip()
+        if sp_str:
+            for item in sp_str.split(","):
+                sep = ":" if ":" in item else "-"
+                parts = item.split(sep, 1)
+                if len(parts) >= 1 and parts[0].strip().isdigit():
+                    d_int_sp = int(parts[0].strip())
+                    if 1 <= d_int_sp <= month_days and is_weekday(d_int_sp):
+                        special_leave_days += 1
+
         long_leave_days = 0
         long_leave_str = str(row.get("預約長假日期", "")).strip()
         if long_leave_str:
