@@ -1379,6 +1379,27 @@ if st.session_state.step >= 3:
                         nat_list3 = st.session_state.nat_holidays_list
                         illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
 
+                        # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別）──────────────
+                        # 均等化互換時，這些格的班別不可被移走
+                        _prewhite_set3: set = set()
+                        _mand_hol_set3: set = set()
+                        _gongcha_set3:  set = set()
+                        for _pi3, _pr3 in ai_df.iterrows():
+                            for _dv3 in str(_pr3.get("預白日期", "")).split(","):
+                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
+                                    _prewhite_set3.add((_pi3, int(_dv3.strip())))
+                            for _item3 in str(_pr3.get("國定假日必上班別", "")).split(","):
+                                for _delim3 in [":", "-"]:
+                                    if _delim3 in _item3:
+                                        _dvx3, _svx3 = _item3.split(_delim3, 1)
+                                        if _dvx3.strip().isdigit() and 1 <= int(_dvx3.strip()) <= month_days:
+                                            _mand_hol_set3.add((_pi3, int(_dvx3.strip())))
+                                        break
+                            for _dv3 in str(_pr3.get("公差日期", "")).split(","):
+                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
+                                    _gongcha_set3.add((_pi3, int(_dv3.strip())))
+                        _locked_set3 = _prewhite_set3 | _mand_hol_set3 | _gongcha_set3
+
                         def can_work_base(n_idx, s, d_int):
                             if sched[n_idx][d_int] not in ["", "上課"]: return False
                             # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
@@ -1632,6 +1653,9 @@ if st.session_state.step >= 3:
 
                                         # ── 情況 1：a 讓出後仍 ≥ 下限（直接讓渡）──
                                         if a_after >= a_min:
+                                            # ★ 保護：a 的班若為鎖定格（國定必上班別/公差/預白），不可讓渡
+                                            if (a_idx, d_int) in _locked_set3:
+                                                continue
                                             sched[a_idx][d_int] = ""
                                             if can_work_base(b_idx, b_pref_s, d_int) and group_cap_ok(b_idx, b_pref_s, d_int, sched, cache_group3):
                                                 sched[b_idx][d_int] = b_pref_s
@@ -1643,6 +1667,9 @@ if st.session_state.step >= 3:
                                         # ── 情況 2：a 讓出後會跌破下限 → 嘗試「日期對調」──
                                         # a 讓出 d_int 給 b，同時 a 去搶 b 沒排到的某天 d2
                                         else:
+                                            # ★ 保護：a 的班若為鎖定格，不可讓渡
+                                            if (a_idx, d_int) in _locked_set3:
+                                                continue
                                             sched[a_idx][d_int] = ""
                                             if not can_work_base(b_idx, b_pref_s, d_int):
                                                 sched[a_idx][d_int] = b_pref_s  # b 無法接，復原
@@ -1871,6 +1898,27 @@ if st.session_state.step >= 4:
 
                     illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
 
+                    # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別）──────────────
+                    # E/N 均等化互換時，這些格的班別不可被移走
+                    _prewhite_set4: set = set()
+                    _mand_hol_set4: set = set()
+                    _gongcha_set4:  set = set()
+                    for _pi4, _pr4 in ai_df.iterrows():
+                        for _dv4 in str(_pr4.get("預白日期", "")).split(","):
+                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
+                                _prewhite_set4.add((_pi4, int(_dv4.strip())))
+                        for _item4 in str(_pr4.get("國定假日必上班別", "")).split(","):
+                            for _delim4 in [":", "-"]:
+                                if _delim4 in _item4:
+                                    _dvx4, _svx4 = _item4.split(_delim4, 1)
+                                    if _dvx4.strip().isdigit() and 1 <= int(_dvx4.strip()) <= month_days:
+                                        _mand_hol_set4.add((_pi4, int(_dvx4.strip())))
+                                    break
+                        for _dv4 in str(_pr4.get("公差日期", "")).split(","):
+                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
+                                _gongcha_set4.add((_pi4, int(_dv4.strip())))
+                    _locked_set4 = _prewhite_set4 | _mand_hol_set4 | _gongcha_set4
+
                     def can_work_base(n_idx, s, d_int, strict_wow=True):
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
                         # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
@@ -2082,6 +2130,8 @@ if st.session_state.step >= 4:
                                     if _swapped4: break
                                     _ov_shift4 = sched[_ov4][_d4]
                                     if _ov_shift4 not in ("E", "N"): continue
+                                    # ★ 保護：over 的班若為鎖定格（國定必上班別/公差/預白），不可移走
+                                    if (_ov4, _d4) in _locked_set4: continue
                                     if sched[_un4][_d4] not in ("", "上課"): continue
                                     if not _can_en_nocheck4(_un4, _ov_shift4, _d4): continue
 
@@ -2090,6 +2140,8 @@ if st.session_state.step >= 4:
                                     for _wd4 in range(1, month_days + 1):
                                         if _wd4 == _d4: continue
                                         if sched[_un4][_wd4] != "D": continue
+                                        # ★ 保護：under 的平日班若為鎖定格，不可清除
+                                        if (_un4, _wd4) in _locked_set4: continue
                                         if not _can_D_nocheck4(_ov4, _wd4): continue
                                         sched[_ov4][_d4] = ""
                                         sched[_un4][_d4] = _ov_shift4
