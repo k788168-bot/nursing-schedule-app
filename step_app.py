@@ -2630,7 +2630,7 @@ if st.session_state.step >= 6:
             ot_history_s   = st.session_state.ot_history
             ot_days_count_s= st.session_state.ot_days_count
             avg_ot_line    = round(sum(ot_history_s[idx]) / len(ot_history_s[idx]), 1) if ot_history_s[idx] else "-"
-            worked_count   = sum(1 for v in s_vals if str(v) in ["D","E","N","12-8"] or str(v).startswith("D"))
+            worked_count   = sum(1 for v in s_vals if str(v) in ["D","E","N","12-8","公差"] or str(v).startswith("D"))
             target         = personal_targets[idx]
 
             # 休假統計
