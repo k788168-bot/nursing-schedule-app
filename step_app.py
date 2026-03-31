@@ -1418,12 +1418,12 @@ if st.session_state.step >= 3:
                             if sched[n_idx][d_int] not in ["", "上課"]: return False
                             # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                             if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat3, cache_can_sun3, cache_can_nat3, sat_list3, sun_list3, nat_list3): return False
-                            if str(d_int) in class_days_map.get(n_idx, []):
-                                if cache_pref[n_idx] == "" and s not in ["D", "N"]: return False
-                            
+                            # 上課日不得排 E 或 12-8（適用所有護理師，包班亦同）
+                            if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False
+
                             y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
                             t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
-                            
+
                             y_s_base = "D" if (y_s.startswith("D") or y_s == "公差") else y_s
                             if y_s == "上課": y_s_base = s
 
@@ -1944,9 +1944,9 @@ if st.session_state.step >= 4:
                         if cache_preg[n_idx] and s in ("E", "N"): return False  # 母性保護僅禁 E/N；12-8 仍可排
                         if cache_title[n_idx] in ADMIN_TITLES: return False
 
-                        if str(d_int) in class_days_map.get(n_idx, []):
-                            if cache_pref[n_idx] == "" and s != "N": return False
-                        
+                        # 上課日不得排 E 或 12-8（適用所有護理師，包班亦同）
+                        if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False
+
                         qual = cache_night[n_idx]
                         if s == "N" and qual != "大夜": return False
                         if s == "E" and qual not in ["大夜", "小夜"]: return False
@@ -2151,6 +2151,8 @@ if st.session_state.step >= 4:
                                     # ★ 保護：over 的班若為鎖定格（國定必上班別/公差/預白），不可移走
                                     if (_ov4, _d4) in _locked_set4: continue
                                     if sched[_un4][_d4] not in ("", "上課"): continue
+                                    # ★ 保護：under 的目標格若為鎖定格（上課日等），不可填入 E/N
+                                    if (_un4, _d4) in _locked_set4: continue
                                     if not _can_en_nocheck4(_un4, _ov_shift4, _d4): continue
 
                                     # ── 策略一：四格互換（兩人總班數不變）──────
@@ -2394,6 +2396,8 @@ if st.session_state.step >= 5:
             # ── 第一階段：先排 12-8 中班（包小夜人員優先）──────────────────
             def can_work_12_8_s5(n_idx, d_int):
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
+                # 上課日不可排 12-8
+                if str(d_int) in class_days_map.get(n_idx, []): return False
                 # 夜班資格：12-8 需有大夜/小夜/中班資格，或為母性保護人員
                 if cache_pref[n_idx] == "" and cache_night5[n_idx] not in ("大夜", "小夜", "中班") and not cache_preg5[n_idx]: return False
                 # 包班人員有假日出勤義務，不受假日資格限制
@@ -2597,6 +2601,8 @@ if st.session_state.step >= 5:
                             if sched[_ov5][_d5] != "12-8": continue
                             # under 必須是空班或上課日
                             if sched[_un5][_d5] not in ["", "上課"]: continue
+                            # ★ 保護：under 的目標格若為鎖定格（上課日等），不可填入 12-8
+                            if (_un5, _d5) in _locked_set5: continue
                             # under 在這天能排 12-8（不含目標上限）
                             if not _can_12_8_nocheck(_un5, _d5): continue
 
