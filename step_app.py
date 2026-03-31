@@ -687,6 +687,64 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
                         if not has_leader: 
                             shortages.append(f"🚨 {day_str}號：{s_c} 班 缺乏專屬控台指揮官！")
                         
+    # ── A/B 組別平衡警示 ─────────────────────────────────────────────────────
+    try:
+        cache_group_radar = {}
+        for i in ai_df_local.index:
+            try:
+                cache_group_radar[i] = str(ai_df_local.at[i, "組別"]).strip().upper()
+            except Exception:
+                cache_group_radar[i] = ""
+
+        sat_set_r = set(st.session_state.get("saturdays_list", []))
+        sun_set_r = set(st.session_state.get("sundays_list", []))
+
+        for d in range(1, month_days_local + 1):
+            day_str = str(d)
+
+            # 12-8 班：A組需3人、B組需3人
+            nurses_128 = [i for i in ai_df_local.index if sched_df.at[i, day_str] == "12-8"]
+            if nurses_128:
+                a128 = sum(1 for i in nurses_128 if cache_group_radar.get(i) == "A")
+                b128 = sum(1 for i in nurses_128 if cache_group_radar.get(i) == "B")
+                if a128 != 3:
+                    shortages.append(f"🚨 {day_str}號：12-8 班 A組 {a128} 人（應為3）")
+                if b128 != 3:
+                    shortages.append(f"🚨 {day_str}號：12-8 班 B組 {b128} 人（應為3）")
+
+            # E 小夜班：A組需2人、B組需2人
+            nurses_e = [i for i in ai_df_local.index if sched_df.at[i, day_str] == "E"]
+            if nurses_e:
+                ae = sum(1 for i in nurses_e if cache_group_radar.get(i) == "A")
+                be = sum(1 for i in nurses_e if cache_group_radar.get(i) == "B")
+                if ae != 2:
+                    shortages.append(f"🚨 {day_str}號：E 班 A組 {ae} 人（應為2）")
+                if be != 2:
+                    shortages.append(f"🚨 {day_str}號：E 班 B組 {be} 人（應為2）")
+
+            # 週六白班：A組至少3人
+            if d in sat_set_r:
+                nurses_d_sat = [i for i in ai_df_local.index
+                                if isinstance(sched_df.at[i, day_str], str)
+                                and sched_df.at[i, day_str].startswith("D")]
+                ad_sat = sum(1 for i in nurses_d_sat if cache_group_radar.get(i) == "A")
+                if ad_sat < 3:
+                    shortages.append(f"⚠️ {day_str}號（週六）：D 班 A組僅 {ad_sat} 人（需≥3）")
+
+            # 週日白班：A組至少2人、B組至少2人
+            if d in sun_set_r:
+                nurses_d_sun = [i for i in ai_df_local.index
+                                if isinstance(sched_df.at[i, day_str], str)
+                                and sched_df.at[i, day_str].startswith("D")]
+                ad_sun = sum(1 for i in nurses_d_sun if cache_group_radar.get(i) == "A")
+                bd_sun = sum(1 for i in nurses_d_sun if cache_group_radar.get(i) == "B")
+                if ad_sun < 2:
+                    shortages.append(f"⚠️ {day_str}號（週日）：D 班 A組僅 {ad_sun} 人（需≥2）")
+                if bd_sun < 2:
+                    shortages.append(f"⚠️ {day_str}號（週日）：D 班 B組僅 {bd_sun} 人（需≥2）")
+    except Exception:
+        pass
+
     if shortages:
         with st.expander(f"🚨 結算警示：共 {len(shortages)} 項（點擊展開）", expanded=False):
             for msg in shortages:
@@ -2205,6 +2263,42 @@ if st.session_state.step >= 5:
                                     else: break
                                 if _sc >= 4: score -= (_sc - 3) * 2_000_000
                                 score += group_d_score(idx, d_int, set(sat_list5), set(sun_list5), sched, cache_group5)
+
+                                # ── 前瞻懲罰：若排今天會讓連班數延伸至週末導致週末無法出勤，
+                                #    且該週末仍短缺此護理師所屬組別，則給予重懲 ──
+                                _grp5_la = cache_group5.get(idx, "")
+                                if _grp5_la in ("A", "B"):
+                                    _sat5s = set(sat_list5)
+                                    _sun5s = set(sun_list5)
+                                    # 往後看最多 5 天（連五上限）
+                                    for _ld5 in range(d_int + 1, min(d_int + 6, month_days + 1)):
+                                        if _ld5 not in (_sat5s | _sun5s):
+                                            continue
+                                        # 確認該週末仍短缺此組
+                                        if _ld5 in _sat5s:
+                                            _mn5 = _GROUP_D_SAT_MIN.get(_grp5_la, 0)
+                                        else:
+                                            _mn5 = _GROUP_D_SUN_MIN.get(_grp5_la, 0)
+                                        if _mn5 == 0:
+                                            continue
+                                        _curr_wknd5 = sum(
+                                            1 for _ii in ai_df.index
+                                            if cache_group5.get(_ii) == _grp5_la
+                                            and isinstance(sched[_ii][_ld5], str)
+                                            and sched[_ii][_ld5].startswith("D")
+                                        )
+                                        if _curr_wknd5 >= _mn5:
+                                            continue
+                                        # 模擬：排今天後往前連班數
+                                        _back5 = 0
+                                        for _bd5 in range(d_int - 1, 0, -1):
+                                            if is_work(sched[idx][_bd5]): _back5 += 1
+                                            else: break
+                                        # 若連班 + 今天 + 到週末的距離 > 5，此護理師無法排週末
+                                        if _back5 + 1 + (_ld5 - d_int) > 5:
+                                            score -= 35_000_000
+                                        break  # 只懲罰最近一個有需求的週末
+
                                 return score + random.random()
 
                             best_nurse = max(available, key=evaluate_nurse)
@@ -2212,6 +2306,67 @@ if st.session_state.step >= 5:
                             progress = True
                             break
                         if not progress: break  # 本輪無任何進展，提前結束
+
+            # ── 週末 A/B 組別預先卡位：在填入平日 D 班前，先確保週末達到組別最低配額 ──
+            # 原理：先鎖定週末名額 → 主排班迴圈的連五上限檢查會自動阻止相同護理師
+            #       在週末前塞滿連續平日，從根本消除「B組全部休在同一週末」的問題。
+            def pre_assign_group_weekend_d_s5():
+                _sat5p = set(sat_list5)
+                _sun5p = set(sun_list5)
+                _hol5p = _sat5p | _sun5p | set(nat_list5)
+                # (day, group, min_count) — 週六只要求 A；週日要求 A 和 B
+                _reqs5p = []
+                for _d in sorted(_sat5p):
+                    for _g, _mn in _GROUP_D_SAT_MIN.items():
+                        if _mn > 0: _reqs5p.append((_d, _g, _mn))
+                for _d in sorted(_sun5p):
+                    for _g, _mn in _GROUP_D_SUN_MIN.items():
+                        if _mn > 0: _reqs5p.append((_d, _g, _mn))
+
+                for _d5p, _grp5p, _min5p in _reqs5p:
+                    _curr5p = sum(
+                        1 for i in ai_df.index
+                        if cache_group5.get(i) == _grp5p
+                        and isinstance(sched[i][_d5p], str)
+                        and sched[i][_d5p].startswith("D")
+                    )
+                    _need5p = _min5p - _curr5p
+                    if _need5p <= 0:
+                        continue
+                    # 確認 D 班當日配額尚有餘裕
+                    _qr5p = edited_quota_df[edited_quota_df["日期"] == str(_d5p)]
+                    if _qr5p.empty:
+                        continue
+                    try:
+                        _quota5p = int(_qr5p.iloc[0]["D班"])
+                    except (KeyError, ValueError):
+                        continue
+                    # 候選人：同組、非包班、非行政、可合法出勤（放寬 strict_wow 允許孤立班）
+                    _cands5p = [
+                        i for i in ai_df.index
+                        if cache_group5.get(i) == _grp5p
+                        and cache_pref[i] == ""
+                        and cache_title[i] not in ADMIN_TITLES
+                        and can_work_base(i, "D", _d5p, strict_wow=False)
+                    ]
+                    # 公平排序：假日出勤天數少的優先 → 總出勤天數少的優先
+                    _cands5p.sort(key=lambda i: (
+                        sum(1 for _hd in _hol5p if is_work(sched[i][_hd])),
+                        sum(1 for v in sched[i] if is_work(v))
+                    ))
+                    for _ci5p in _cands5p:
+                        if _need5p <= 0:
+                            break
+                        _tot5p = sum(
+                            1 for _i in ai_df.index
+                            if isinstance(sched[_i][_d5p], str) and sched[_i][_d5p].startswith("D")
+                        )
+                        if _tot5p >= _quota5p:
+                            break
+                        sched[_ci5p][_d5p] = "D"
+                        _need5p -= 1
+
+            pre_assign_group_weekend_d_s5()
 
             if st.session_state.skill_cols:
                 for sk in st.session_state.skill_cols: assign_d_shifts(target_skill=sk)
@@ -2576,6 +2731,70 @@ if st.session_state.step >= 6:
             personal_targets = st.session_state.personal_targets
 
             illegal_next = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+
+            # ── 第六步週末 A/B 組別補強：優先補足週末 D 班組別最低配額 ──
+            _sat6p = set(sat_list6)
+            _sun6p = set(sun_list6)
+            _hol6p = _sat6p | _sun6p | set(nat_list6)
+            _reqs6p = []
+            for _d6p in sorted(_sat6p):
+                for _g6p, _mn6p in _GROUP_D_SAT_MIN.items():
+                    if _mn6p > 0: _reqs6p.append((_d6p, _g6p, _mn6p))
+            for _d6p in sorted(_sun6p):
+                for _g6p, _mn6p in _GROUP_D_SUN_MIN.items():
+                    if _mn6p > 0: _reqs6p.append((_d6p, _g6p, _mn6p))
+
+            for _day6p, _grp6p, _min6p in _reqs6p:
+                _curr6p = sum(
+                    1 for i in ai_df.index
+                    if cache_group6.get(i) == _grp6p
+                    and isinstance(sched[i][_day6p], str)
+                    and sched[i][_day6p].startswith("D")
+                )
+                _need6p = _min6p - _curr6p
+                if _need6p <= 0:
+                    continue
+                _qr6p = edited_quota_df[edited_quota_df["日期"] == str(_day6p)]
+                if _qr6p.empty:
+                    continue
+                try:
+                    _quota6p = int(_qr6p.iloc[0]["D班"])
+                except (KeyError, ValueError):
+                    continue
+                _cands6p = []
+                for i in ai_df.index:
+                    if cache_group6.get(i) != _grp6p: continue
+                    if cache_pref[i] != "": continue
+                    if cache_title[i] in ADMIN_TITLES: continue
+                    if sched[i][_day6p] != "": continue
+                    if cache_pref[i] == "" and not can_work_holiday_check(
+                            i, _day6p, cache_can_sat6, cache_can_sun6, cache_can_nat6,
+                            sat_list6, sun_list6, nat_list6): continue
+                    _worked6p = sum(1 for x in sched[i] if is_work(x))
+                    if _worked6p >= personal_targets[i]: continue
+                    # 連五檢查
+                    _sc6p = 1
+                    for _b6p in range(_day6p - 1, 0, -1):
+                        if is_work(sched[i][_b6p]): _sc6p += 1
+                        else: break
+                    for _f6p in range(_day6p + 1, month_days + 1):
+                        if is_work(sched[i][_f6p]): _sc6p += 1
+                        else: break
+                    if _sc6p > 5: continue
+                    _cands6p.append(i)
+                _cands6p.sort(key=lambda i: (
+                    sum(1 for _hd in _hol6p if is_work(sched[i][_hd])),
+                    sum(1 for v in sched[i] if is_work(v))
+                ))
+                for _ci6p in _cands6p:
+                    if _need6p <= 0: break
+                    _tot6p = sum(
+                        1 for _i in ai_df.index
+                        if isinstance(sched[_i][_day6p], str) and sched[_i][_day6p].startswith("D")
+                    )
+                    if _tot6p >= _quota6p: break
+                    sched[_ci6p][_day6p] = "D"
+                    _need6p -= 1
 
             # ── 清尾補班：12-8 排完後，補回仍未達 personal_targets 的空格 ──
             for n_idx in ai_df.index:
