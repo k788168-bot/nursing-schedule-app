@@ -1154,7 +1154,9 @@ if st.session_state.step >= 2:
             _toff_scan = st.session_state.target_off
             for idx, row in ai_df.iterrows():
                 _title_scan = str(row.get("職稱", "")).strip()
-                if _title_scan in NO_HOL_ADMIN:
+                if _title_scan in NO_HOL_SET:
+                    # 護理長/副護理長/助理/傷兵/組長：不排假日班，預休/長假/特假均直接扣平日
+                    # target_off=0 → 所有平日假別（O+長假+特假）都算扣減
                     _el = calc_extra_leaves(row, st.session_state.month_days,
                                             _scan_sat, _scan_sun, _scan_nat, target_off=0)
                     _calc_t = max(0, _scan_weekday_count - _el)
@@ -1742,8 +1744,8 @@ if st.session_state.step >= 4:
                     _toff4 = st.session_state.target_off
                     for idx, row in ai_df.iterrows():
                         _title4 = str(row.get("職稱", "")).strip()
-                        if _title4 in NO_HOL_ADMIN:
-                            # 副護理長/護理長/助理/傷兵：平日全上；預休/長假/特假均直接扣平日
+                        if _title4 in NO_HOL_SET:
+                            # 護理長/副護理長/助理/傷兵/組長：不排假日班，預休/長假/特假均直接扣平日
                             # target_off=0 → 所有平日假別（O+長假+特假）都算扣減
                             extra_leaves = calc_extra_leaves(row, month_days, sat_list4, sun_list4, nat_list4, target_off=0)
                             personal_targets[idx] = max(0, _weekday_count4 - extra_leaves)
@@ -2016,13 +2018,13 @@ if st.session_state.step >= 5:
             _toff5 = st.session_state.target_off
             for idx, row in ai_df.iterrows():
                 title_idx = str(row.get("職稱", "")).strip()
-                if title_idx in NO_HOL_ADMIN:
-                    # 副護理長/護理長/助理/傷兵：平日全上；預休/長假/特假均直接扣平日
+                if title_idx in NO_HOL_SET:
+                    # 護理長/副護理長/助理/傷兵/組長：不排假日班，預休/長假/特假均直接扣平日
                     # target_off=0 → 所有平日假別（O+長假+特假）都算扣減
                     extra_leaves = calc_extra_leaves(row, month_days, sat_list5, sun_list5, nat_list5, target_off=0)
                     personal_targets[idx] = max(0, _weekday_count5 - extra_leaves)
                 else:
-                    # 一般護理師（含組長）：O+長假先佔用 target_off，超出才扣工作天；特假直接扣
+                    # 一般護理師：O+長假先佔用 target_off，超出才扣工作天；特假直接扣
                     extra_leaves = calc_extra_leaves(row, month_days, sat_list5, sun_list5, nat_list5, target_off=_toff5)
                     personal_targets[idx] = max(0, month_days - _toff5 - extra_leaves)
             # 套用手動調整的應上班天數
@@ -2136,14 +2138,17 @@ if st.session_state.step >= 5:
             remaining_12_8_s5 = max(0, total_12_8_demand_s5 - pack_12_8_supply_s5)
             target_12_8_s5 = remaining_12_8_s5 // len(elig_12_8_s5) if elig_12_8_s5 else 0
 
-            # 夜班天數均等池：非包班、非行政職稱的常規人員
-            # 【重要】刻意排除包班人員：包班護理師的夜班數由 Step 3 決定，不應拉高目標值
-            # 【注意】母性保護人員納入池中：她們只能排 12-8（不能排 E/N），
+            # 夜班天數均等池（均等化規則）：
+            # ‣ 排除：包班意願不為空、職稱為「組長」
+            # ‣ 納入：其餘具夜班資格（夜班資格欄不為空白）的人員
+            # ‣ 均等目標：E + N + 12-8 合計差距 ≤ 1
+            # 【注意】母性保護人員（有夜班資格）納入池中：她們只能排 12-8，
             #         透過均等化讓其 12-8 天數補足，縮小與一般人員的夜班落差
             elig_night_s5 = [
                 i for i in ai_df.index
-                if cache_title[i] not in ADMIN_TITLES
-                and cache_pref[i] == ""   # 只含常規非包班人員（含母性保護）
+                if cache_pref[i] == ""             # 排除包班人員
+                and cache_title[i] != "組長"       # 排除組長
+                and cache_night5[i] != ""          # 必須具夜班資格
             ]
             # 目標夜班天數 = (常規人員目前已排 E+N+12-8 總計 + 尚待排入的 12-8 需求) / 均等池人數
             _already_night_s5 = sum(
@@ -2598,6 +2603,20 @@ if st.session_state.step >= 5:
                             continue
                         sched[n_idx][d_int] = eff_sf
 
+            # ── 傷兵/助理 最終兜底：強制填滿所有平日空格（不套用任何勞基法限制）──────────────
+            # 傷兵/助理：沒有預假，平日全上白班，不計入單位人力配額
+            # 放在所有排班邏輯最後，確保不受任何約束漏排
+            _nohol_hol_set = set(sat_list5) | set(sun_list5) | set(nat_list5)
+            for _nohol_idx in ai_df.index:
+                if cache_title[_nohol_idx] not in NO_HOL_ADMIN:
+                    continue
+                for _nohol_d in range(1, month_days + 1):
+                    if _nohol_d in _nohol_hol_set:
+                        continue  # 假日不排
+                    if sched[_nohol_idx][_nohol_d] not in ["", "上課"]:
+                        continue  # 已有班別（含特殊假別）→ 保留
+                    sched[_nohol_idx][_nohol_d] = "D"
+
             # ── 假日出勤事後均等化 ─────────────────────────────────────────
             # 修正 1：擴展互換支援 D/E/N/12-8 所有班別（同班別才能互換）
             # 修正 2：分兩個均等化池
@@ -2681,12 +2700,18 @@ if st.session_state.step >= 5:
                     if not _swapped_h:
                         break
 
-            # 常規池：非包班、非行政、至少能上一種假日（全部同池）
+            # 假日出勤均等池（均等化規則，與夜班均等池相同基準）：
+            # ‣ 排除：包班意願不為空、職稱為「組長」
+            # ‣ 納入：其餘具夜班資格且至少能上一種假日的人員
+            # ‣ 均等目標：假日出勤天數差距 ≤ 1
+            # 【注意】無任何假日出勤能力者即使有夜班資格也不納入，
+            #         避免無法出勤者拉低假日均等目標使全體假日上班數歸零
             _hol_elig_set = set(
                 i for i in ai_df.index
-                if cache_pref[i] == ""
-                and cache_title[i] not in ADMIN_TITLES
-                and (cache_can_sat5[i] or cache_can_sun5[i] or cache_can_nat5[i])
+                if cache_pref[i] == ""                                          # 排除包班人員
+                and cache_title[i] != "組長"                                    # 排除組長
+                and cache_night5[i] != ""                                       # 必須具夜班資格
+                and (cache_can_sat5[i] or cache_can_sun5[i] or cache_can_nat5[i])  # 至少能上一種假日
             )
             _equalize_holiday_pool(_hol_elig_set)
 
@@ -3310,6 +3335,8 @@ if st.session_state.step >= 7:
 
             for row_i in range(len(ai_df)):
                 week_has_jiqi = {}
+                _title_r7 = str(ai_df.iloc[row_i].get("職稱", "")).strip()
+                _is_nohol_r7 = _title_r7 in NO_HOL_ADMIN  # 傷兵/助理：平日不標休假
 
                 # ── 第一回：依日期類型分配假別 ──
                 # 規則：
@@ -3320,6 +3347,7 @@ if st.session_state.step >= 7:
                 #   平日（非六日非國定）→
                 #       O       → 依 pre_type_map7 標「預假」或「預長假」
                 #       空白    → 標「休假」（系統排定休息）
+                #                 ※ 傷兵/助理（NO_HOL_ADMIN）例外：平日不標休假
                 #       其他（公假/喪假等特殊假別）→ 保留原假別名稱
                 for d in range(1, month_days + 1):
                     col  = str(d)
@@ -3342,7 +3370,9 @@ if st.session_state.step >= 7:
                             classified.iat[row_i, cidx] = pre_type_map7.get(
                                 (row_i, d), "預假")
                         elif cell == "":
-                            classified.iat[row_i, cidx] = "休假"
+                            # 傷兵/助理 平日不排休假（排班階段已強制填滿平日）
+                            if not _is_nohol_r7:
+                                classified.iat[row_i, cidx] = "休假"
                         # 其他（公假、喪假等特殊假別）→ 保留原值不動
 
                 # ── 第二回：確保每週至少一個例假（§36）──
