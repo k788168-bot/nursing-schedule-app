@@ -1236,22 +1236,6 @@ if st.session_state.step >= 2:
                 })
             _targets_df_raw = pd.DataFrame(_targets_data)
 
-            # ── 欠班預警：理論可達上限 < 應上班天數 → 可能有結構性欠班 ──
-            _struct_deficit = _targets_df_raw[_targets_df_raw["理論可達上限"] < _targets_df_raw["應上班天數"]]
-            if not _struct_deficit.empty:
-                st.warning(
-                    f"⚠️ **長假/預休結構性欠班預警（{len(_struct_deficit)} 人）**：以下護理師因 O/長假佔用工作日過多，"
-                    "在勞基法限制下，理論上**無法達到**所設應上班天數目標，建議護理長手動調低「應上班天數」："
-                )
-                _warn_rows = []
-                for _, _wr in _struct_deficit.iterrows():
-                    _gap = int(_wr["應上班天數"]) - int(_wr["理論可達上限"])
-                    _warn_rows.append(
-                        f"- **{_wr['姓名']}**：目標 {int(_wr['應上班天數'])} 天，理論上限 {int(_wr['理論可達上限'])} 天"
-                        f"（差距 **{_gap}** 天，建議目標調整為 {int(_wr['理論可達上限'])}）"
-                    )
-                st.markdown("\n".join(_warn_rows))
-
             _targets_edit_df = st.data_editor(
                 _targets_df_raw,
                 column_config={
