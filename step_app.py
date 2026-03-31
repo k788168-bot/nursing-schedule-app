@@ -2599,6 +2599,8 @@ if st.session_state.step >= 5:
                                     score += 2_000_000   # 填補孤立休假空隙（最優）
                                 elif is_work(_y5b) or is_work(_t5b):
                                     score += 500_000     # 延伸既有連班
+                                elif _needed_now >= 2:
+                                    pass                 # 欠班≥2天：不懲罰孤立班，讓欠班優先填滿月末空格
                                 else:
                                     score -= 2_000_000   # 兩側皆休，孤立班（最差）
 
@@ -2731,7 +2733,10 @@ if st.session_state.step >= 5:
                     if sched[idx][d] == "上課":
                         sched[idx][d] = "D"
 
-            deficit_nurses = [i for i in ai_df.index if sum(1 for v in sched[i] if is_work(v)) < personal_targets[i]]
+            deficit_nurses = sorted(
+                [i for i in ai_df.index if sum(1 for v in sched[i] if is_work(v)) < personal_targets[i]],
+                key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]  # 欠班最多者優先（最負值排最前）
+            )
             for n_idx in deficit_nurses:
                 worked = sum(1 for v in sched[n_idx] if is_work(v))
                 target = personal_targets[n_idx]
@@ -2839,7 +2844,7 @@ if st.session_state.step >= 5:
                 if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                 return True
 
-            for n_idx in ai_df.index:
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
                 _pref_f = cache_pref[n_idx]
                 if _pref_f:
@@ -2899,7 +2904,7 @@ if st.session_state.step >= 5:
             # 優先補工作日，假日若有缺也補；配額嚴守上限（不使用緩衝）
             _hol_set_p3 = set(sat_list5) | set(sun_list5) | set(nat_list5)
             _il_p3 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
-            for n_idx in ai_df.index:
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
                 if cache_pref[n_idx]: continue          # 包班人員：只排其包班班別
                 if cache_title[n_idx] in ADMIN_TITLES: continue  # 行政職：只能上 D
@@ -3262,7 +3267,7 @@ if st.session_state.step >= 6:
                     _need6p -= 1
 
             # ── 清尾補班：12-8 排完後，補回仍未達 personal_targets 的空格 ──
-            for n_idx in ai_df.index:
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 _pref6 = cache_pref[n_idx]
                 # 行政職稱（組長/護理長/副護理長）只能上白班；包班人員補其包班班別；其餘補 D
                 if cache_title[n_idx] in ADMIN_TITLES:
@@ -3339,7 +3344,7 @@ if st.session_state.step >= 6:
             # ── 清尾補班 Pass 2：夜班資格者補 E / N / 12-8（D 班已窮盡後）──────
             _hol_set6p2 = set(sat_list6) | set(sun_list6) | set(nat_list6)
             _il_p2 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
-            for n_idx in ai_df.index:
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
                 if cache_pref[n_idx]: continue            # 包班人員已由上方 Pass 處理
                 if cache_title[n_idx] in ADMIN_TITLES: continue  # 行政職稱只上 D
