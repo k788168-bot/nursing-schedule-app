@@ -1104,15 +1104,24 @@ if st.session_state.step >= 3:
                             return "N" if "大夜" in pref else ("E" if "小夜" in pref else ("12-8" if "中" in pref else "D"))
 
                         def en_quota_full3(s_type, d_int):
-                            """回傳 True 表示當日 E/N 人力配額已滿（不可再加）"""
-                            if s_type not in ("E", "N"):
+                            """回傳 True 表示當日該班別人力配額已滿（不可再加）
+                            支援 E / N / 12-8 / D 四種班別"""
+                            _q_map = {"E": "E班", "N": "N班", "12-8": "12-8", "D": "D班"}
+                            if s_type not in _q_map:
                                 return False
-                            q_col3 = f"{s_type}班"
+                            q_col3 = _q_map[s_type]
                             row_d3 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                             if row_d3.empty:
                                 return False
-                            req3 = int(row_d3.iloc[0][q_col3])
-                            curr3 = sum(1 for i in ai_df.index if sched[i][d_int] == s_type)
+                            try:
+                                req3 = int(row_d3.iloc[0][q_col3])
+                            except (KeyError, ValueError):
+                                return False
+                            if s_type == "D":
+                                curr3 = sum(1 for i in ai_df.index
+                                            if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D"))
+                            else:
+                                curr3 = sum(1 for i in ai_df.index if sched[i][d_int] == s_type)
                             return curr3 >= req3
 
                         pack_indices3 = [i for i in ai_df.index if cache_pref[i] != ""]
@@ -1163,9 +1172,10 @@ if st.session_state.step >= 3:
                             pref_s = get_pref_s(pref)
                             for d_int in range(1, month_days + 1):
                                 if sched[idx][d_int] == "上課":
-                                    if can_work_base(idx, pref_s, d_int):
+                                    if not en_quota_full3(pref_s, d_int) and can_work_base(idx, pref_s, d_int):
                                         sched[idx][d_int] = pref_s
-                                    else:
+                                    # E/N包班：配額滿或無法排包班班次時，保持上課狀態（不改成D班）
+                                    elif pref_s not in ("E", "N"):
                                         sched[idx][d_int] = "D"
 
                         # ── 第一階段（續）：非假日天 — 以日為外迴圈均分包班班別 ──
@@ -1339,22 +1349,6 @@ if st.session_state.step >= 3:
                                 return sum(1 for v in row_sched if isinstance(v, str) and v.startswith("D"))
                             return sum(1 for v in row_sched if v == ss)
 
-                        def _supp_quota_full(s_type, d_int):
-                            """回傳 True 表示當日該補充班別配額已滿（不得再安插）"""
-                            q_col = "12-8" if s_type == "12-8" else f"{s_type}班"
-                            row_d = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
-                            if row_d.empty: return False
-                            try:
-                                req = int(row_d.iloc[0][q_col])
-                            except (KeyError, ValueError):
-                                return False
-                            if s_type == "D":
-                                curr = sum(1 for i in ai_df.index
-                                           if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D"))
-                            else:
-                                curr = sum(1 for i in ai_df.index if sched[i][d_int] == s_type)
-                            return curr >= req
-
                         for idx, row in ai_df.iterrows():
                             pref = cache_pref[idx]
                             if pref == "": continue
@@ -1376,7 +1370,7 @@ if st.session_state.step >= 3:
                                 supp_now = _supp_count(sched[idx], supp_s)
                                 if pack_now + supp_now >= min_pack: break
                                 if sched[idx][d_int] not in ["", "上課"]: continue
-                                if _supp_quota_full(supp_s, d_int): continue  # 當日配額已滿，不得超出
+                                if en_quota_full3(supp_s, d_int): continue  # 當日配額已滿，不得超出
                                 if can_work_base(idx, supp_s, d_int):
                                     sched[idx][d_int] = supp_s
 
