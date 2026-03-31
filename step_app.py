@@ -2796,6 +2796,70 @@ if st.session_state.step >= 5:
                             continue
                         sched[n_idx][d_int] = eff_sf
 
+            # ── 補足 Pass 3：夜班班別補足（D 班已窮盡後，嘗試 E / N / 12-8）──────────
+            # 對象：具夜班資格、非包班、非行政職、仍有欠班的一般護理師
+            # 優先補工作日，假日若有缺也補；配額嚴守上限（不使用緩衝）
+            _hol_set_p3 = set(sat_list5) | set(sun_list5) | set(nat_list5)
+            _il_p3 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            for n_idx in ai_df.index:
+                if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
+                if cache_pref[n_idx]: continue          # 包班人員：只排其包班班別
+                if cache_title[n_idx] in ADMIN_TITLES: continue  # 行政職：只能上 D
+                if cache_night5[n_idx] == "": continue  # 無夜班資格：只能上 D
+                # 依夜班資格決定可嘗試班別
+                _alt_p3 = ["E", "N", "12-8"] if not cache_preg5[n_idx] else ["12-8"]
+                for _s3 in _alt_p3:
+                    if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                    def _pat_p3(d):
+                        y3 = sched[n_idx][d - 1] if d > 1 else ""
+                        t3 = sched[n_idx][d + 1] if d < month_days else ""
+                        if is_work(y3) and is_work(t3): return 0
+                        if is_work(y3) or is_work(t3): return 1
+                        return 2
+                    for d_int in sorted(range(1, month_days + 1), key=_pat_p3):
+                        if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                        if sched[n_idx][d_int] != "": continue
+                        # 配額上限（嚴守，不使用緩衝）
+                        _rq_p3 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        if not _rq_p3.empty:
+                            try:
+                                _req3 = int(_rq_p3.iloc[0][f"{_s3}班"])
+                                _cur3 = sum(1 for i in ai_df.index if sched[i][d_int] == _s3)
+                                if _cur3 >= _req3: continue
+                            except (KeyError, ValueError): pass
+                        # 假日出勤能力
+                        if not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5,
+                                                       cache_can_nat5, sat_list5, sun_list5, nat_list5): continue
+                        # 相鄰班別規定
+                        _y3 = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                        _t3 = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        _yb3 = "D" if (_y3.startswith("D") or _y3 in ("上課","公差")) else _y3
+                        _tb3 = "D" if (_t3.startswith("D") or _t3 in ("上課","公差")) else _t3
+                        if is_work(_y3) and _s3 in _il_p3.get(_yb3, []): continue
+                        if is_work(_t3) and _tb3 in _il_p3.get(_s3, []): continue
+                        # 連五上限
+                        _sc3 = 1
+                        for _bd3 in range(d_int - 1, 0, -1):
+                            if is_work(sched[n_idx][_bd3]): _sc3 += 1
+                            else: break
+                        for _fd3 in range(d_int + 1, month_days + 1):
+                            if is_work(sched[n_idx][_fd3]): _sc3 += 1
+                            else: break
+                        if _sc3 > 5: continue
+                        # 14 日窗口
+                        _14ok3 = True
+                        _wm3 = max(1, d_int - 13)
+                        _wx3 = min(d_int, month_days - 13) if month_days >= 14 else 1
+                        for _sd3 in range(_wm3, _wx3 + 1):
+                            _ed3 = min(month_days, _sd3 + 13)
+                            _ww3 = sum(1 for _cd3 in range(_sd3, _ed3 + 1)
+                                       if _cd3 != d_int and is_work(sched[n_idx][_cd3]))
+                            if _ww3 + 1 > 12: _14ok3 = False; break
+                        if not _14ok3: continue
+                        if not week_variety_ok(sched, n_idx, _s3, d_int, st.session_state.first_wday, month_days): continue
+                        if _s3 in ("12-8", "E") and not group_cap_ok(n_idx, _s3, d_int, sched, cache_group5): continue
+                        sched[n_idx][d_int] = _s3
+
             # ── 傷兵/助理 最終兜底：強制填滿所有平日空格（不套用任何勞基法限制）──────────────
             # 傷兵/助理：沒有預假，平日全上白班，不計入單位人力配額
             # 放在所有排班邏輯最後，確保不受任何約束漏排
@@ -3019,6 +3083,7 @@ if st.session_state.step >= 6:
             cache_title    = {i: str(row.get("職稱","")).strip() for i, row in ai_df.iterrows()}
             cache_pref     = {i: str(row.get("包班意願","")).strip() for i, row in ai_df.iterrows()}
             cache_preg6    = {i: str(row.get("孕/育嬰免夜班","")).strip() == "是" for i, row in ai_df.iterrows()}
+            cache_night6   = {i: str(row.get("夜班資格","")).strip() for i, row in ai_df.iterrows()}
             cache_leader6  = {i: str(row.get("控台資格","")).strip() for i, row in ai_df.iterrows()}
             class_days_map = {i: [s.strip() for s in str(row.get("上課日期","")).split(",") if s.strip().isdigit()] for i, row in ai_df.iterrows()}
             cache_can_sat6 = {i: str(row.get("能上週六","")).strip() == "是" for i, row in ai_df.iterrows()}
@@ -3129,8 +3194,7 @@ if st.session_state.step >= 6:
                                     _curr6 = sum(1 for i in ai_df.index
                                                  if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
                                                  and cache_title[i] not in NO_HOL_ADMIN)
-                                    if _curr6 >= _req6:
-                                        continue
+                                    if _curr6 >= _req6: continue
                             elif eff_fill6 == "12-8":
                                 _req6 = int(_row_q6.iloc[0]["12-8"])
                                 _curr6 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -3171,6 +3235,203 @@ if st.session_state.step >= 6:
                     if not week_variety_ok(sched, n_idx, eff_fill6, d_int, st.session_state.first_wday, month_days): continue
                     if eff_fill6 in ("12-8", "E") and not group_cap_ok(n_idx, eff_fill6, d_int, sched, cache_group6): continue
                     sched[n_idx][d_int] = eff_fill6
+
+            # ── 清尾補班 Pass 2：夜班資格者補 E / N / 12-8（D 班已窮盡後）──────
+            _hol_set6p2 = set(sat_list6) | set(sun_list6) | set(nat_list6)
+            _il_p2 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            for n_idx in ai_df.index:
+                if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
+                if cache_pref[n_idx]: continue            # 包班人員已由上方 Pass 處理
+                if cache_title[n_idx] in ADMIN_TITLES: continue  # 行政職稱只上 D
+                if cache_night6[n_idx] == "": continue   # 無夜班資格：只能上 D，不在此 pass 處理
+                _alt_p2 = ["E", "N", "12-8"] if not cache_preg6[n_idx] else ["12-8"]
+                def _pat_p2(d, s=n_idx):
+                    """優先排在現有班別多的週內，分散原則"""
+                    if d in _hol_set6p2: return (1, d)  # 假日後排
+                    return (0, d)
+                for _s2 in _alt_p2:
+                    if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                    for d_int in sorted(range(1, month_days + 1), key=lambda d: _pat_p2(d)):
+                        if sched[n_idx][d_int] != "": continue
+                        if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                        # 假日出勤資格
+                        if d_int in _hol_set6p2:
+                            if cache_title[n_idx] in NO_HOL_SET: continue
+                            if not can_work_holiday_check(n_idx, d_int, cache_can_sat6, cache_can_sun6, cache_can_nat6, sat_list6, sun_list6, nat_list6): continue
+                        # 夜班資格對應班別限制
+                        _night6q = cache_night6[n_idx]
+                        if _s2 == "N" and _night6q not in ("大夜",): continue
+                        if _s2 == "E" and _night6q not in ("小夜",): continue
+                        if _s2 == "12-8" and _night6q not in ("大夜", "小夜", "中班"): continue
+                        # 每日配額上限
+                        _row_q6p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        if not _row_q6p2.empty:
+                            try:
+                                _col_p2 = {"E": "E班", "N": "N班", "12-8": "12-8"}.get(_s2)
+                                if _col_p2:
+                                    _req_p2 = int(_row_q6p2.iloc[0][_col_p2])
+                                    _cur_p2 = sum(1 for i in ai_df.index if sched[i][d_int] == _s2)
+                                    if _cur_p2 >= _req_p2: continue
+                            except (KeyError, ValueError):
+                                pass
+                        # 勞基法：相鄰班別間距
+                        _ys_p2 = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                        _ts_p2 = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        _yk_p2 = "D" if (_ys_p2.startswith("D") or _ys_p2 in ("上課","公差")) else _ys_p2
+                        _tk_p2 = "D" if (_ts_p2.startswith("D") or _ts_p2 in ("上課","公差")) else _ts_p2
+                        if is_work(_ys_p2) and _s2 in _il_p2.get(_yk_p2, []): continue
+                        if is_work(_ts_p2) and _tk_p2 in _il_p2.get(_s2, []): continue
+                        # 連五
+                        _sc_p2 = 1
+                        for _b2 in range(d_int - 1, 0, -1):
+                            if is_work(sched[n_idx][_b2]): _sc_p2 += 1
+                            else: break
+                        for _f2 in range(d_int + 1, month_days + 1):
+                            if is_work(sched[n_idx][_f2]): _sc_p2 += 1
+                            else: break
+                        if _sc_p2 > 5: continue
+                        # 14 日窗口
+                        _w2_min = max(1, d_int - 13)
+                        _w2_max = min(d_int, month_days - 13) if month_days >= 14 else 1
+                        _14d_p2 = True
+                        for _sd2 in range(_w2_min, _w2_max + 1):
+                            _ed2 = min(month_days, _sd2 + 13)
+                            _ww2 = sum(1 for _cd2 in range(_sd2, _ed2 + 1)
+                                       if _cd2 != d_int and is_work(sched[n_idx][_cd2]))
+                            if _ww2 + 1 > 12:
+                                _14d_p2 = False
+                                break
+                        if not _14d_p2: continue
+                        # 週多樣性 + 組別上限
+                        if not week_variety_ok(sched, n_idx, _s2, d_int, st.session_state.first_wday, month_days): continue
+                        if _s2 in ("12-8", "E") and not group_cap_ok(n_idx, _s2, d_int, sched, cache_group6): continue
+                        sched[n_idx][d_int] = _s2
+
+            # ── Step 6 夜班均等化：清尾補班 Pass 2 後重新拉平 E+N+12-8 差距 ≤ 1 ──
+            # 建立 _locked_set6（預白班/公差/國定假日必上班別，不可被互換移動）
+            _prewhite_set6: set = set()
+            _mand_hol_set6: set = set()
+            _gongcha_set6:  set = set()
+            for _pi6, _pr6 in ai_df.iterrows():
+                for _dv6 in str(_pr6.get("預白日期", "")).split(","):
+                    if _dv6.strip().isdigit() and 1 <= int(_dv6.strip()) <= month_days:
+                        _prewhite_set6.add((_pi6, int(_dv6.strip())))
+                for _item6 in str(_pr6.get("國定假日必上班別", "")).split(","):
+                    for _delim6 in [":", "-"]:
+                        if _delim6 in _item6:
+                            _dv6 = _item6.split(_delim6)[0].strip()
+                            if _dv6.isdigit() and 1 <= int(_dv6) <= month_days:
+                                _mand_hol_set6.add((_pi6, int(_dv6)))
+                            break
+                for _dv6 in str(_pr6.get("公差日期", "")).split(","):
+                    if _dv6.strip().isdigit() and 1 <= int(_dv6.strip()) <= month_days:
+                        _gongcha_set6.add((_pi6, int(_dv6.strip())))
+            _locked_set6 = _prewhite_set6 | _mand_hol_set6 | _gongcha_set6
+
+            # 均等池：非包班、非組長、具夜班資格
+            _night_elig6 = [
+                i for i in ai_df.index
+                if cache_pref[i] == ""
+                and cache_title[i] != "組長"
+                and cache_night6[i] != ""
+            ]
+            _night_elig_set6 = set(_night_elig6)
+            _il6_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+
+            def _can_12_8_nocheck6(n_idx, d_int):
+                """Step 6：d_int 可合法排 12-8（不含 personal_targets 上限，適用互換）"""
+                if sched[n_idx][d_int] not in ["", "上課"]: return False
+                if cache_pref[n_idx] == "" and cache_night6[n_idx] not in ("大夜", "小夜", "中班") and not cache_preg6[n_idx]: return False
+                if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat6, cache_can_sun6, cache_can_nat6, sat_list6, sun_list6, nat_list6): return False
+                _y6e = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                _t6e = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                _yb6e = "D" if (_y6e.startswith("D") or _y6e in ("上課", "公差")) else _y6e
+                _tb6e = "D" if (_t6e.startswith("D") or _t6e in ("上課", "公差")) else _t6e
+                if is_work(_y6e) and "12-8" in _il6_eq.get(_yb6e, []): return False
+                if is_work(_t6e) and _tb6e in _il6_eq.get("12-8", []): return False
+                _sc6e = 1
+                for _bd6 in range(d_int - 1, 0, -1):
+                    if is_work(sched[n_idx][_bd6]): _sc6e += 1
+                    else: break
+                for _fd6 in range(d_int + 1, month_days + 1):
+                    if is_work(sched[n_idx][_fd6]): _sc6e += 1
+                    else: break
+                if _sc6e > 5: return False
+                return True
+
+            def _can_D_nocheck6(n_idx, d_int):
+                """Step 6：d_int 可合法排 D（不含 personal_targets 上限，適用互換）"""
+                if sched[n_idx][d_int] not in ["", "上課"]: return False
+                _y6e = sched[n_idx][d_int - 1] if d_int > 1 else ""
+                _t6e = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                _yb6e = "D" if (_y6e.startswith("D") or _y6e in ("上課", "公差")) else _y6e
+                _tb6e = "D" if (_t6e.startswith("D") or _t6e in ("上課", "公差")) else _t6e
+                if is_work(_y6e) and "D" in _il6_eq.get(_yb6e, []): return False
+                if is_work(_t6e) and _tb6e in _il6_eq.get("D", []): return False
+                _sc6e = 1
+                for _bd6 in range(d_int - 1, 0, -1):
+                    if is_work(sched[n_idx][_bd6]): _sc6e += 1
+                    else: break
+                for _fd6 in range(d_int + 1, month_days + 1):
+                    if is_work(sched[n_idx][_fd6]): _sc6e += 1
+                    else: break
+                if _sc6e > 5: return False
+                return True
+
+            for _nit6 in range(500):
+                _nc6 = {i: sum(1 for v in sched[i] if v in ("E", "N", "12-8"))
+                        for i in _night_elig_set6}
+                if not _nc6: break
+                _nmax6 = max(_nc6.values())
+                _nmin6 = min(_nc6.values())
+                if _nmax6 - _nmin6 <= 1: break
+
+                _over_l6  = [i for i, c in _nc6.items() if c == _nmax6]
+                _under_l6 = [i for i, c in _nc6.items() if c == _nmin6]
+
+                _swapped6 = False
+                for _ov6 in _over_l6:
+                    if _swapped6: break
+                    for _un6 in _under_l6:
+                        if _swapped6: break
+                        for _d6 in range(1, month_days + 1):
+                            if _swapped6: break
+                            # over 必須有 12-8
+                            if sched[_ov6][_d6] != "12-8": continue
+                            # under 必須是空班或上課日
+                            if sched[_un6][_d6] not in ["", "上課"]: continue
+                            # under 在這天能排 12-8
+                            if not _can_12_8_nocheck6(_un6, _d6): continue
+
+                            # ── 策略一：四格互換（兩人總班數不變）──────────
+                            _four_done6 = False
+                            for _wd6 in range(1, month_days + 1):
+                                if _wd6 == _d6: continue
+                                if sched[_un6][_wd6] != "D": continue
+                                # ★ 保護預白/公差/國定必上班
+                                if (_un6, _wd6) in _locked_set6: continue
+                                if not _can_D_nocheck6(_ov6, _wd6): continue
+                                if (_ov6, _d6) in _locked_set6: continue
+                                # 執行四格互換
+                                sched[_ov6][_d6] = ""
+                                sched[_un6][_d6] = "12-8"
+                                sched[_un6][_wd6] = ""
+                                sched[_ov6][_wd6] = "D"
+                                _swapped6 = True
+                                _four_done6 = True
+                                break
+
+                            # ── 策略二：單格轉讓（under 仍低於目標時備用）──
+                            if not _four_done6:
+                                _un_worked6 = sum(1 for x in sched[_un6] if is_work(x))
+                                if _un_worked6 < personal_targets.get(_un6, 0):
+                                    if (_ov6, _d6) not in _locked_set6:
+                                        sched[_ov6][_d6] = ""
+                                        sched[_un6][_d6] = "12-8"
+                                        _swapped6 = True
+
+                if not _swapped6:
+                    break   # 找不到可交換組合，停止
 
             # ── 第六步欠班診斷：清尾補班後仍有欠班時，收集原因 ─────────────
             _hol_set6d = set(sat_list6) | set(sun_list6) | set(nat_list6)
