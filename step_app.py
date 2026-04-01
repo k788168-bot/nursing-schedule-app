@@ -1060,10 +1060,10 @@ if st.session_state.step >= 2:
                 temp_skills = st.multiselect("請選擇本次排班需考量的次專科項目", skill_cols, default=skill_cols)
                 
                 weekly_template = []
-                for wd in weekday_names_list:
+                for wd in weekday_names_list[:5]:   # 僅週一～週五
                     q_week = {"星期": wd}
-                    for s in temp_skills: 
-                        q_week[f"{s}需求"] = 0 
+                    for s in temp_skills:
+                        q_week[f"{s}需求"] = 0
                     weekly_template.append(q_week)
                 st.info("👉 請在下方表格輸入每個平日各次專科「至少需要幾個人上班」：")
                 edited_weekly_df = st.data_editor(pd.DataFrame(weekly_template), hide_index=True, use_container_width=True, disabled=["星期"])
@@ -2861,7 +2861,12 @@ if st.session_state.step >= 5:
                             req = int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0]["D班"])
                             if target_skill:
                                 curr_w_day = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][(st.session_state.first_wday + d - 1) % 7]
-                                req = int(edited_weekly_df[edited_weekly_df["星期"] == curr_w_day].iloc[0][f"{target_skill}需求"]) if not edited_weekly_df.empty else 0
+                                # 週六、週日不設次專科需求，直接視為 0
+                                if curr_w_day in ("週六", "週日"):
+                                    req = 0
+                                else:
+                                    _wdf_match = edited_weekly_df[edited_weekly_df["星期"] == curr_w_day] if not edited_weekly_df.empty else pd.DataFrame()
+                                    req = int(_wdf_match.iloc[0][f"{target_skill}需求"]) if not _wdf_match.empty else 0
                             
                             curr = sum(1 for i in ai_df.index if sched[i][d] == "D"
                                        and cache_title[i] not in NO_HOL_ADMIN
@@ -3446,17 +3451,41 @@ if st.session_state.step >= 5:
             st.success("✅ 12-8 + 白班已全數排入，所有人上班天數完美符合應上班天數！")
 
         # ── 換班配對推薦（僅在最終班表產出後顯示）──────────────────────────────
+        # 規則：同一天真正對調——欠班者得到超班者的班，超班者改為休；
+        #       預假日（O / 特殊假別）與預班日（預白 / 上課 / 公差）均不可異動。
         if st.session_state.get("final_sched") is not None:
             st.write("#### 🔄 換班配對推薦")
 
-            _pt_sw   = st.session_state.personal_targets
-            _fs_sw   = st.session_state.final_sched
+            _pt_sw    = st.session_state.personal_targets
+            _fs_sw    = st.session_state.final_sched
             _dcols_sw = [str(_d) for _d in range(1, month_days + 1)]
-            _sat_sw  = set(st.session_state.saturdays_list)
-            _sun_sw  = set(st.session_state.sundays_list)
-            _nat_sw  = set(st.session_state.nat_holidays_list)
-            _hol_sw  = _sat_sw | _sun_sw | _nat_sw
-            _il_sw   = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
+            _sat_sw   = set(st.session_state.saturdays_list)
+            _sun_sw   = set(st.session_state.sundays_list)
+            _nat_sw   = set(st.session_state.nat_holidays_list)
+            _hol_sw   = _sat_sw | _sun_sw | _nat_sw
+            _il_sw    = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
+
+            # ── 鎖定日判斷：預假 / 預班 / 上課 / 公差 均不可異動 ──────────────
+            def _is_locked_sw(nidx, day):
+                _cell = str(_fs_sw.at[nidx, str(day)] if str(day) in _fs_sw.columns and nidx in _fs_sw.index else "").strip()
+                # 特殊值直接鎖定
+                if _cell in ("O", "上課", "公差"): return True
+                # 特殊假別（非空白、非標準班別代碼）
+                _standard = {"", "D", "E", "N", "12-8"}
+                if _cell not in _standard and not (_cell.startswith("D") and _cell[1:].isdigit()): return True
+                # 預休日期（ai_df 欄位）
+                _pre_off = {int(s.strip()) for s in str(ai_df.at[nidx, "預休日期"] if "預休日期" in ai_df.columns else "").split(",") if s.strip().isdigit()}
+                if day in _pre_off: return True
+                # 預白日期（ai_df 欄位）
+                _pre_wh = {int(s.strip()) for s in str(ai_df.at[nidx, "預白日期"] if "預白日期" in ai_df.columns else "").split(",") if s.strip().isdigit()}
+                if day in _pre_wh: return True
+                # 上課日期（ai_df 欄位）
+                _class_d = {int(s.strip()) for s in str(ai_df.at[nidx, "上課日期"] if "上課日期" in ai_df.columns else "").split(",") if s.strip().isdigit()}
+                if day in _class_d: return True
+                # 公差日期（ai_df 欄位）
+                _gongcha = {int(s.strip()) for s in str(ai_df.at[nidx, "公差日期"] if "公差日期" in ai_df.columns else "").split(",") if s.strip().isdigit()}
+                if day in _gongcha: return True
+                return False
 
             # 計算每人實際上班天數
             _wk_sw = {
@@ -3511,26 +3540,33 @@ if st.session_state.step >= 5:
                 for _d in range(1, month_days + 1):
                     _dkey = str(_d)
                     if _dkey not in _fs_sw.columns: continue
-                    if str(_fs_sw.at[_un, _dkey] if _un in _fs_sw.index else "").strip() not in ("", "nan"):
-                        continue  # 非空格跳過
+                    _un_cell = str(_fs_sw.at[_un, _dkey] if _un in _fs_sw.index else "").strip()
+                    # 欠班者當日必須為空格（真正可排入）
+                    if _un_cell not in ("", "nan"): continue
+                    # 欠班者此日不可為鎖定日
+                    if _is_locked_sw(_un, _d): continue
+
                     for _ov in _over_sw:
                         if _ov == _un: continue
                         _ov_val = str(_fs_sw.at[_ov, _dkey] if _ov in _fs_sw.index else "").strip()
+                        # 超班者當日必須有可移出的工作班
                         if not is_work(_ov_val): continue
-                        # 條件一：移出後超班者仍 >= personal_targets
+                        # 超班者此日不可為鎖定日（預假 / 預白 / 上課 / 公差）
+                        if _is_locked_sw(_ov, _d): continue
+                        # 對調後超班者工作天數仍 >= personal_targets
                         if _wk_sw[_ov] - 1 < _pt_sw.get(_ov, 0): continue
-                        # 條件二：連五上限
+                        # 欠班者排入後連五合法
                         if not _consec_sw(_un, _d): continue
-                        # 條件三：鄰班規則（用班別基底比對）
+                        # 欠班者鄰班規則
                         _shift_base = "D" if _ov_val.startswith("D") else _ov_val
                         if not _adj_sw(_un, _shift_base, _d): continue
-                        # 條件四：假日出勤資格
+                        # 假日出勤資格
                         if not _hol_sw_ok(_un, _d): continue
-                        # ✅ 配對成功
+                        # ✅ 合法對調配對
                         _recs_sw.append({
                             "欠班者":   ai_df.at[_un, "姓名"],
                             "超班者":   ai_df.at[_ov, "姓名"],
-                            "換班日期": _d,
+                            "對調日期": _d,
                             "班別":     _ov_val,
                             "_un":      _un,
                             "_ov":      _ov,
@@ -3540,20 +3576,21 @@ if st.session_state.step >= 5:
                     if _un in _done_under: break
 
             if _recs_sw:
+                st.caption("💡 對調方式：欠班者在該日得到超班者的班別；超班者當日改為休息。預假日與預班日均不納入配對。")
                 st.dataframe(
-                    pd.DataFrame(_recs_sw)[["欠班者", "超班者", "換班日期", "班別"]],
+                    pd.DataFrame(_recs_sw)[["欠班者", "超班者", "對調日期", "班別"]],
                     use_container_width=False, hide_index=True
                 )
                 if st.button("✅ 套用所有推薦換班", key="btn_apply_swap_recs"):
                     _fs_new = st.session_state.final_sched.copy()
                     for _rec in _recs_sw:
-                        _dk = str(_rec["換班日期"])
+                        _dk = str(_rec["對調日期"])
                         _fs_new.at[_rec["_un"], _dk] = _rec["班別"]
                         _fs_new.at[_rec["_ov"], _dk] = ""
                     st.session_state.final_sched = _fs_new
                     st.rerun()
             else:
-                st.info("✅ 目前無欠班情形，或欠班人員已無法找到合法換班配對，無推薦換班。")
+                st.info("✅ 目前無欠班情形，或欠班人員已無法找到合法對調配對，無推薦換班。")
 
         with st.expander("📄 點擊展開白班排班結果", expanded=True):
             _edit_d = st.checkbox("🖊️ 開啟手動編輯模式", value=False, key="chk_edit_d_sched")
