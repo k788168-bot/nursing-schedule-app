@@ -1422,8 +1422,8 @@ if st.session_state.step >= 3:
                             # 上課日不得排 E 或 12-8（適用所有護理師，包班亦同）
                             if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False
 
-                            y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                            t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                            y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                            t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
 
                             y_s_base = "D" if (y_s.startswith("D") or y_s == "公差") else y_s
                             if y_s == "上課": y_s_base = s
@@ -1955,8 +1955,8 @@ if st.session_state.step >= 4:
                         worked = sum(1 for x in sched[n_idx] if is_work(x))
                         if worked >= personal_targets[n_idx]: return False
 
-                        y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                        t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                        t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                         y_s_base = "D" if y_s.startswith("D") or y_s in ("上課", "公差") else y_s
                         t_s_base = "D" if t_s.startswith("D") or t_s in ("上課", "公差") else t_s
 
@@ -2191,8 +2191,8 @@ if st.session_state.step >= 4:
                         if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4, sat_list4, sun_list4, nat_list4): return False
                         worked = sum(1 for x in sched[n_idx] if is_work(x))
                         if worked >= personal_targets[n_idx]: return False
-                        y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                        t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                        t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                         y_s_base = "D" if (y_s.startswith("D") or y_s in ("上課", "公差")) else y_s
                         t_s_base = "D" if (t_s.startswith("D") or t_s in ("上課", "公差")) else t_s
                         if is_work(y_s) and "12-8" in illegal_next.get(y_s_base, []): return False
@@ -2312,8 +2312,8 @@ if st.session_state.step >= 4:
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
                         if cache_pref[n_idx] == "" and cache_night[n_idx] not in ("大夜", "小夜", "中班") and not cache_preg[n_idx]: return False
                         if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4, sat_list4, sun_list4, nat_list4): return False
-                        y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                        t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                        y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                        t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                         y_b = "D" if (y_s.startswith("D") or y_s in ("上課", "公差")) else y_s
                         t_b = "D" if (t_s.startswith("D") or t_s in ("上課", "公差")) else t_s
                         if is_work(y_s) and "12-8" in _il4_eq.get(y_b, []): return False
@@ -2555,8 +2555,8 @@ if st.session_state.step >= 5:
                 worked = sum(1 for x in sched[n_idx] if is_work(x))
                 if worked >= personal_targets[n_idx]: return False
 
-                y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                 y_s_base = "D" if y_s.startswith("D") or y_s in ("上課", "公差") else y_s
                 t_s_base = "D" if t_s.startswith("D") or t_s in ("上課", "公差") else t_s
 
@@ -2885,8 +2885,8 @@ if st.session_state.step >= 5:
                         cache_can_nat5, sat_list5, sun_list5, nat_list5): return False
                 if str(d_int) in class_days_map.get(n_idx, []) and s not in ("D", "N"): return False  # 上課日禁E/12-8
                 if sum(1 for x in sched[n_idx] if is_work(x)) >= personal_targets[n_idx]: return False
-                y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                 y_s_base = "D" if y_s.startswith("D") or y_s in ("上課", "公差") else y_s
                 t_s_base = "D" if t_s.startswith("D") or t_s in ("上課", "公差") else t_s
                 if is_work(y_s) and s in illegal_next.get(y_s_base, []): return False
@@ -3059,8 +3059,8 @@ if st.session_state.step >= 5:
             def _legal_place_shift(n_idx, d_int, s):
                 """檢查在 d_int 放 s 班是否合法（相鄰規定 + 連五 + 假日出勤能力）"""
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
-                y_s = sched[n_idx][d_int - 1] if d_int > 1 else ""
-                t_s = sched[n_idx][d_int + 1] if d_int < month_days else ""
+                y_s = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                t_s = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
                 y_b = "D" if (y_s.startswith("D") or y_s in ("上課", "公差")) else y_s
                 t_b = "D" if (t_s.startswith("D") or t_s in ("上課", "公差")) else t_s
                 if is_work(y_s) and s in illegal_next.get(y_b, []): return False
