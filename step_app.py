@@ -1765,28 +1765,29 @@ if st.session_state.step >= 3:
                                 return sum(1 for v in row_sched if isinstance(v, str) and v.startswith("D"))
                             return sum(1 for v in row_sched if v == ss)
 
-                        # ── 第五階段改版：日外迴圈，補充班最少者優先，公平分配 12-8 ──
-                        for d_int in range(1, month_days + 1):
-                            for pref_s_supp in pref_s_set:
-                                if pref_s_supp not in ("E", "N"): continue
-                                supp_s_map = {"E": "12-8", "N": "D"}
-                                supp_s = supp_s_map[pref_s_supp]
+                        # ── 第五階段：E/N包班護士補充班次（讓渡均衡後仍不足時的最後手段）─────
+                        # E班包班 → 補充 12-8 班；N班包班 → 補充 D班（白班）
+                        # 此步驟在包班班次排入、讓渡均衡完成後執行，再接常規夜班排班
+                        for idx, row in ai_df.iterrows():
+                            pref = cache_pref[idx]
+                            if pref == "": continue
+                            pref_s = get_pref_s(pref)
+                            if pref_s not in ("E", "N"): continue  # 僅適用 E/N 包班護士
+                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
+                                                              target_off=_toff3)
+                            max_target = month_days - _toff3 - extra_leaves
+                            if st.session_state.custom_targets and idx in st.session_state.custom_targets:
+                                max_target = st.session_state.custom_targets[idx]
+                            min_pack = min(PACK_MIN_SHIFTS, max_target)
+                            supp_s = "12-8" if pref_s == "E" else "D"
+                            for d_int in range(1, month_days + 1):
+                                pack_now = sum(1 for v in sched[idx] if v == pref_s)
+                                if pack_now < min_pack: break
+                                if sum(1 for v in sched[idx] if is_work(v)) >= max_target: break
+                                if sched[idx][d_int] not in ["", "上課"]: continue
                                 if en_quota_full3(supp_s, d_int): continue
-                                group_supp = [i for i in pack_indices3
-                                              if get_pref_s(cache_pref[i]) == pref_s_supp
-                                              and sum(1 for v in sched[i] if v == pref_s_supp) >= min(PACK_MIN_SHIFTS, max_target3[i])
-                                              and sum(1 for v in sched[i] if is_work(v)) < max_target3[i]]
-                                if not group_supp: continue
-                                group_supp_sorted = sorted(group_supp, key=lambda i: (
-                                    sum(1 for v in sched[i] if is_work(v)),    # 總出勤最少者優先
-                                    sum(1 for v in sched[i] if v == supp_s),   # 補充班最少者次之
-                                    i
-                                ))
-                                for idx in group_supp_sorted:
-                                    if en_quota_full3(supp_s, d_int): break
-                                    if sched[idx][d_int] not in ["", "上課"]: continue
-                                    if can_work_base(idx, supp_s, d_int) and group_cap_ok(idx, supp_s, d_int, sched, cache_group3):
-                                        sched[idx][d_int] = supp_s
+                                if can_work_base(idx, supp_s, d_int) and group_cap_ok(idx, supp_s, d_int, sched, cache_group3):
+                                    sched[idx][d_int] = supp_s
 
                         # ── 包班下限檢查：警示以包班班別（pref_s）班數為準 ──
                         # 補充班次（12-8 / D班）不計入警示判斷，但顯示於表格供參考
