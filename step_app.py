@@ -1648,9 +1648,9 @@ if st.session_state.step >= 3:
                                 group3 = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
                                 if not group3: continue
                                 group3_sorted = sorted(group3, key=lambda i: (
-                                    sum(1 for v in sched[i] if is_work(v)),        # 總出勤最少者優先
-                                    sum(1 for v in sched[i] if v == pref_s),       # 包班班次最少者次之
-                                    i
+                                    sum(1 for v in sched[i] if is_work(v)),                                # 總出勤最少者優先
+                                    sum(1 for v in sched[i] if v == pref_s),                              # 包班班次最少者次之
+                                    -(max_target3[i] - sum(1 for v in sched[i] if v == pref_s))           # 距目標缺口最大者再優先
                                 ))
                                 for idx in group3_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
