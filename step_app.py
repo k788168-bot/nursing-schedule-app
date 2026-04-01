@@ -2204,9 +2204,16 @@ if st.session_state.step >= 4:
                                         if not has_leader and is_leader_for_shift: score += 50000000
                                         if cache_circ[idx] and curr_circ < target_circ: score += 10000000
 
-                                        # ── 預休接軌加分：若當日排夜班，隔天恰為該護理師的 O 日，給予加分 ──
-                                        # 意義：N 接 O 完全合法，緩衝日與休假日重疊，省下一個排班空格
-                                        if (d_int + 1) in cache_pre_off4.get(idx, set()):
+                                        # ── 擴大版預休接軌加分：隔天是任何一種休日，封鎖日就不浪費可用空格 ──
+                                        # 涵蓋：護理師預休 O 日、週六、週日、國定假日
+                                        _next_d4 = d_int + 1
+                                        _next_is_rest4 = (
+                                            _next_d4 in cache_pre_off4.get(idx, set())
+                                            or _next_d4 in set(sat_list4)
+                                            or _next_d4 in set(sun_list4)
+                                            or _next_d4 in set(nat_list4)
+                                        )
+                                        if _next_is_rest4:
                                             score += 5_000_000
 
                                         # ── 剩餘容量預判：排入此夜班後，後續有效空格能否補滿應上班天數 ──
