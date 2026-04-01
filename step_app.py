@@ -1843,7 +1843,7 @@ if st.session_state.step >= 3:
 # ==========================================
 if st.session_state.step >= 4:
     st.divider()
-    st.header("4️⃣ 第四步：自動排滿小夜(E)與大夜(N)班")
+    st.header("4️⃣ 第四步：排入常規夜班")
 
     ai_df = st.session_state.ai_df
     month_days = st.session_state.month_days
@@ -1860,8 +1860,6 @@ if st.session_state.step >= 4:
     edited_quota_df = st.session_state.edited_quota_df
     
     if st.session_state.night_sched is None:
-        st.info("💡 系統將啟動【流動與階梯控台防護網】，優先保障每班流動人數達半數，且至少包含一位合格控台(白班可控所有、小夜可控E/N、大夜僅控N)。")
-        
         col_btn_back, col_btn_go = st.columns([1, 4])
         with col_btn_back:
             if st.button("⬅️ 回到第三步", type="secondary"):
@@ -2377,6 +2375,91 @@ if st.session_state.step >= 4:
 
                         if not _swapped4b:
                             break  # 找不到可交換組合，停止
+
+                    # ── 統一後處理均等化（E+N+12-8 全班種可互換，差距 ≤ 1）──────────────
+                    # 對象：elig_night_s4（大夜＋小夜＋中班，非包班，非組長）
+                    # 邏輯：找出 E/N/12-8 合計最多(over)與最少(under)的護理師，
+                    #       嘗試把 over 在某天的夜班直接交給 under（含鄰班/連五/資格驗證）
+                    # 策略一（優先）：四格互換 over[X]→"", over[Y]→D; under[X]→夜班, under[Y]→""
+                    # 策略二（備用）：單格轉讓（under 仍未達 personal_targets 時）
+
+                    def _can_any_night_unified4(n_idx, s, d_int):
+                        """d_int 能合法排入 s（E/N/12-8），供統一均等化互換使用"""
+                        if sched[n_idx][d_int] not in ["", "上課"]: return False
+                        if cache_preg[n_idx] and s in ("E", "N"): return False
+                        qual4u = cache_night[n_idx]
+                        if s == "N" and qual4u != "大夜": return False
+                        if s == "E" and qual4u not in ("大夜", "小夜"): return False
+                        if s == "12-8" and qual4u not in ("大夜", "小夜", "中班") and not cache_preg[n_idx]: return False
+                        if cache_pref[n_idx] == "" and not can_work_holiday_check(
+                                n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4,
+                                sat_list4, sun_list4, nat_list4): return False
+                        _yu = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                        _tu = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
+                        _ybu = "D" if (_yu.startswith("D") or _yu in ("上課", "公差")) else _yu
+                        _tbu = "D" if (_tu.startswith("D") or _tu in ("上課", "公差")) else _tu
+                        if is_work(_yu) and s in _il4_eq.get(_ybu, []): return False
+                        if is_work(_tu) and _tbu in _il4_eq.get(s, []): return False
+                        _scu = 1
+                        for _bdu in range(d_int - 1, 0, -1):
+                            if is_work(sched[n_idx][_bdu]): _scu += 1
+                            else: break
+                        for _fdu in range(d_int + 1, month_days + 1):
+                            if is_work(sched[n_idx][_fdu]): _scu += 1
+                            else: break
+                        if _scu > 5: return False
+                        return True
+
+                    _unified_elig_set4 = set(elig_night_s4)
+                    for _nitu in range(800):
+                        _ncu = {i: sum(1 for v in sched[i] if v in ("E", "N", "12-8"))
+                                for i in _unified_elig_set4}
+                        if not _ncu: break
+                        _nmaxu = max(_ncu.values())
+                        _nminu = min(_ncu.values())
+                        if _nmaxu - _nminu <= 1: break
+
+                        _over_lu  = [i for i, c in _ncu.items() if c == _nmaxu]
+                        _under_lu = [i for i, c in _ncu.items() if c == _nminu]
+
+                        _swappedu = False
+                        for _ovu in _over_lu:
+                            if _swappedu: break
+                            for _unu in _under_lu:
+                                if _swappedu: break
+                                for _du in range(1, month_days + 1):
+                                    if _swappedu: break
+                                    _svu = sched[_ovu][_du]
+                                    if _svu not in ("E", "N", "12-8"): continue
+                                    if (_ovu, _du) in _locked_set4: continue
+                                    if sched[_unu][_du] not in ["", "上課"]: continue
+                                    if (_unu, _du) in _locked_set4: continue
+                                    if not _can_any_night_unified4(_unu, _svu, _du): continue
+
+                                    _fouru = False
+                                    for _wdu in range(1, month_days + 1):
+                                        if _wdu == _du: continue
+                                        if sched[_unu][_wdu] != "D": continue
+                                        if (_unu, _wdu) in _locked_set4: continue
+                                        if not _can_D_nocheck4(_ovu, _wdu): continue
+                                        sched[_ovu][_du]  = ""
+                                        sched[_unu][_du]  = _svu
+                                        sched[_unu][_wdu] = ""
+                                        sched[_ovu][_wdu] = "D"
+                                        _swappedu = True
+                                        _fouru = True
+                                        break
+
+                                    if not _fouru:
+                                        _unu_worked = sum(1 for x in sched[_unu] if is_work(x))
+                                        if _unu_worked < personal_targets.get(_unu, 0):
+                                            sched[_ovu][_du] = ""
+                                            sched[_unu][_du] = _svu
+                                            _swappedu = True
+                                            break
+
+                        if not _swappedu:
+                            break  # 無法再縮小差距，停止
 
                     night_df = pd.DataFrame({"姓名": ai_df["姓名"]})
                     for d in range(1, month_days + 1):
