@@ -1993,6 +1993,11 @@ if st.session_state.step >= 4:
                     cache_can_sun4 = {i: str(row.get("能上週日", "")).strip() == "是" for i, row in ai_df.iterrows()}
                     cache_can_nat4 = {i: str(row.get("能上國定假日", "")).strip() == "是" for i, row in ai_df.iterrows()}
                     cache_group4   = {i: str(row.get("組別", "")).strip().upper() for i, row in ai_df.iterrows()}
+                    # ── 預休接軌快取：記錄每位護理師的預休（O）日期集合 ──
+                    cache_pre_off4 = {
+                        i: {int(d.strip()) for d in str(row.get("預休日期", "")).split(",") if d.strip().isdigit()}
+                        for i, row in ai_df.iterrows()
+                    }
                     sat_list4 = st.session_state.saturdays_list
                     sun_list4 = st.session_state.sundays_list
                     nat_list4 = st.session_state.nat_holidays_list
@@ -2163,6 +2168,29 @@ if st.session_state.step >= 4:
 
                                         if not has_leader and is_leader_for_shift: score += 50000000
                                         if cache_circ[idx] and curr_circ < target_circ: score += 10000000
+
+                                        # ── 預休接軌加分：若當日排夜班，隔天恰為該護理師的 O 日，給予加分 ──
+                                        # 意義：N 接 O 完全合法，緩衝日與休假日重疊，省下一個排班空格
+                                        if (d_int + 1) in cache_pre_off4.get(idx, set()):
+                                            score += 5_000_000
+
+                                        # ── 夜班區塊化加分：鼓勵同班別連排，減少強制緩衝日浪費 ──
+                                        # N-N 或 E-E 連排只需一個緩衝日；N-O-N 則需兩個
+                                        _prev_s4 = sched[idx][d_int - 1] if d_int > 1 else ""
+                                        _next_s4 = sched[idx][d_int + 1] if d_int < month_days else ""
+                                        if _prev_s4 == s_type or _next_s4 == s_type:
+                                            score += 3_000_000  # 同班別連排加分
+
+                                        # ── 剩餘容量預判：排入此夜班後，後續有效空格能否補滿應上班天數 ──
+                                        # 保守估計：夜班後至少損失 1 個強制緩衝日，有效空格再減 1
+                                        _worked_now4 = sum(1 for x in sched[idx] if is_work(x))
+                                        _still_need4 = personal_targets.get(idx, 0) - _worked_now4 - 1  # 排入本班後還需幾天
+                                        _empty_after4 = sum(
+                                            1 for _d4 in range(d_int + 2, month_days + 1)  # d_int+1 為緩衝日，從 d+2 起算
+                                            if sched[idx][_d4] == ""
+                                        )
+                                        if _still_need4 > 0 and _empty_after4 < _still_need4:
+                                            score -= 8_000_000  # 空格不足，大幅懲罰（但不硬阻，保留均分彈性）
 
                                         # 連五上限懲罰（超過 4 連班才懲罰）
                                         _sc = 1
