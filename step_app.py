@@ -2855,7 +2855,7 @@ if st.session_state.step >= 5:
 
             illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
-            def can_work_base(n_idx, s, d_int, strict_wow=True):
+            def can_work_base(n_idx, s, d_int, strict_wow=True, week_variety_override=False):
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
                 # 行政職稱（組長/護理長/副護理長）只能上白班
                 if cache_title[n_idx] in ADMIN_TITLES and s != "D": return False
@@ -2900,7 +2900,7 @@ if st.session_state.step >= 5:
                         if curr_d == d_int: continue
                         if is_work(sched[n_idx][curr_d]): worked_in_window += 1
                     if worked_in_window + 1 > 12: return False
-                if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
+                if not week_variety_override and not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                 return True
 
             # ── 排入白班（D）至 personal_targets ──────────────────────────────
@@ -3133,7 +3133,7 @@ if st.session_state.step >= 5:
                     f_s = "N" if "大夜" in _pref5 else ("E" if "小夜" in _pref5 else ("12-8" if "中" in _pref5 else "D"))
                 else:
                     f_s = "D"
-                for strict_wow in [True, False]:
+                for strict_wow, _wv_override in [(True, False), (False, False), (False, True)]:
                     if worked >= target: break
                     # 優先補填「兩側皆已是班」的空隙，其次補延伸連班，最後才補孤立空格
                     def _day_pat5(d):
@@ -3184,7 +3184,7 @@ if st.session_state.step >= 5:
                                         continue
                             except (KeyError, ValueError):
                                 pass
-                        if can_work_base(n_idx, eff_s5, d_int, strict_wow=strict_wow):
+                        if can_work_base(n_idx, eff_s5, d_int, strict_wow=strict_wow, week_variety_override=_wv_override):
                             if eff_s5 in ("12-8", "E") and not group_cap_ok(n_idx, eff_s5, d_int, sched, cache_group5):
                                 continue
                             sched[n_idx][d_int] = eff_s5
@@ -3193,7 +3193,7 @@ if st.session_state.step >= 5:
             # ── 補足 Pass 2：嚴守勞基法 & 配額，盡力再補到 personal_targets ──
             # 與 deficit_nurses 邏輯相同，但改為逐人全月掃描（不隨機），提高命中率
             _hol_set_f5 = set(sat_list5) | set(sun_list5) | set(nat_list5)
-            def can_work_force5(n_idx, s, d_int):
+            def can_work_force5(n_idx, s, d_int, week_variety_override=False):
                 """補足 Pass 2：完全遵守勞基法（連五/14日窗口）及 E/N 配額上限"""
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
                 if cache_title[n_idx] in ADMIN_TITLES and s != "D": return False
@@ -3228,7 +3228,7 @@ if st.session_state.step >= 5:
                         if _cd == d_int: continue
                         if is_work(sched[n_idx][_cd]): _ww += 1
                     if _ww > 12: return False
-                if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
+                if not week_variety_override and not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                 return True
 
             for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
@@ -3285,6 +3285,42 @@ if st.session_state.step >= 5:
                         if eff_sf in ("12-8", "E") and not group_cap_ok(n_idx, eff_sf, d_int, sched, cache_group5):
                             continue
                         sched[n_idx][d_int] = eff_sf
+
+            # ── 補足 Pass 2b：放寬週多樣性，再嘗試補足仍欠班人員 ──────────────────────
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
+                if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
+                _pref_2b = cache_pref[n_idx]
+                f_s_2b = ("N" if "大夜" in _pref_2b else ("E" if "小夜" in _pref_2b else ("12-8" if "中" in _pref_2b else "D"))) if _pref_2b else "D"
+                def _pat_2b(d):
+                    y = sched[n_idx][d - 1] if d > 1 else ""
+                    t = sched[n_idx][d + 1] if d < month_days else ""
+                    if is_work(y) and is_work(t): return 0
+                    if is_work(y) or is_work(t): return 1
+                    return 2
+                for d_int in sorted(range(1, month_days + 1), key=_pat_2b):
+                    if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                    eff_2b = f_s_2b
+                    if _pref_2b and f_s_2b in ("E", "N"):
+                        _row_2b = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        if not _row_2b.empty:
+                            if sum(1 for i in ai_df.index if sched[i][d_int] == f_s_2b) >= int(_row_2b.iloc[0][f"{f_s_2b}班"]):
+                                continue
+                    _rowq_2b = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                    if not _rowq_2b.empty:
+                        try:
+                            if eff_2b == "D" and cache_title[n_idx] not in NO_HOL_ADMIN:
+                                _rq = int(_rowq_2b.iloc[0]["D班"])
+                                _cq = sum(1 for i in ai_df.index if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D") and cache_title[i] not in NO_HOL_ADMIN)
+                                if d_int in _hol_set_f5:
+                                    if _cq >= _rq: continue
+                                else:
+                                    if _cq >= _rq + 3: continue
+                            elif eff_2b == "12-8":
+                                if sum(1 for i in ai_df.index if sched[i][d_int] == "12-8") >= int(_rowq_2b.iloc[0]["12-8"]): continue
+                        except (KeyError, ValueError): pass
+                    if can_work_force5(n_idx, eff_2b, d_int, week_variety_override=True):
+                        if eff_2b in ("12-8", "E") and not group_cap_ok(n_idx, eff_2b, d_int, sched, cache_group5): continue
+                        sched[n_idx][d_int] = eff_2b
 
             # ── 補足 Pass 3：夜班班別補足（D 班已窮盡後，嘗試 E / N / 12-8）──────────
             # 對象：具夜班資格、非包班、非行政職、仍有欠班的一般護理師
@@ -3348,7 +3384,6 @@ if st.session_state.step >= 5:
                                        if _cd3 != d_int and is_work(sched[n_idx][_cd3]))
                             if _ww3 + 1 > 12: _14ok3 = False; break
                         if not _14ok3: continue
-                        if not week_variety_ok(sched, n_idx, _s3, d_int, st.session_state.first_wday, month_days): continue
                         if _s3 in ("12-8", "E") and not group_cap_ok(n_idx, _s3, d_int, sched, cache_group5): continue
                         sched[n_idx][d_int] = _s3
 
