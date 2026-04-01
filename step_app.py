@@ -2239,6 +2239,30 @@ if st.session_state.step >= 4:
                                         if _still_need4 > 0 and _empty_after4 < _still_need4:
                                             score -= 8_000_000  # 空格不足，大幅懲罰（但不硬阻，保留均分彈性）
 
+                                        # ── 連五影子懲罰：預防夜班落在D班長連段尾端 ──────────
+                                        # 邏輯：夜班左側若有>=4個連續可工作日（空格視為潛在D班），
+                                        #       Step 5 補D班後最外圍那天會被連五擋死，損失1個補班空格
+                                        # 以左側連段長度（含夜班本身）作為評估依據
+                                        _hol_set4_cp = set(sat_list4) | set(sun_list4) | set(nat_list4)
+                                        _left4_cp = 0
+                                        for _bd4_cp in range(d_int - 1, 0, -1):
+                                            _v4_cp = sched[idx][_bd4_cp]
+                                            if _bd4_cp in _hol_set4_cp: break          # 週末：天然斷點
+                                            if _v4_cp not in ("", "上課") and not is_work(_v4_cp): break  # 特殊假別
+                                            _left4_cp += 1
+                                        _chain4_cp = _left4_cp + 1  # 含夜班本身
+                                        if _chain4_cp >= 5:
+                                            score -= (_chain4_cp - 4) * 4_000_000  # 每多1天：-400萬懲罰
+                                        # 右側連段預判（緩衝日d+1後的潛在D班長段）
+                                        _right4_cp = 0
+                                        for _fd4_cp in range(d_int + 2, month_days + 1):  # 跳過強制緩衝日
+                                            _v4_cp = sched[idx][_fd4_cp]
+                                            if _fd4_cp in _hol_set4_cp: break
+                                            if _v4_cp not in ("", "上課") and not is_work(_v4_cp): break
+                                            _right4_cp += 1
+                                        if _right4_cp >= 5:
+                                            score -= (_right4_cp - 4) * 2_000_000  # 右側風險較低，懲罰減半
+
                                         # 連五上限懲罰（超過 4 連班才懲罰）
                                         _sc = 1
                                         for _bd in range(d_int - 1, 0, -1):
