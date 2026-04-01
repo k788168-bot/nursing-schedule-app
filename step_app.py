@@ -1661,7 +1661,8 @@ if st.session_state.step >= 3:
                         # ── 第四階段：包班天數讓渡均衡 ─────────────────────────
                         # 若仍有人未達 15 班下限，嘗試從同組班次較多的人員讓渡可交換的日期
                         def _pack_min_info(idx, row):
-                            """回傳 (pref_s, min_pack, cur_count)"""
+                            """回傳 (pref_s, min_pack, cur_count)
+                            12-8 包班不設下限（mp=0），其餘包班維持 PACK_MIN_SHIFTS 下限。"""
                             pref  = cache_pref[idx]
                             if pref == "": return None
                             ps    = get_pref_s(pref)
@@ -1670,7 +1671,7 @@ if st.session_state.step >= 3:
                             mt    = month_days - _toff3 - el
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 mt = st.session_state.custom_targets[idx]
-                            mp    = min(PACK_MIN_SHIFTS, mt)
+                            mp    = 0 if ps == "12-8" else min(PACK_MIN_SHIFTS, mt)
                             cur   = sum(1 for v in sched[idx] if v == ps)
                             return ps, mp, cur
 
@@ -1779,7 +1780,7 @@ if st.session_state.step >= 3:
                             max_target = month_days - _toff3 - extra_leaves
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
-                            min_pack = min(PACK_MIN_SHIFTS, max_target)
+                            min_pack = 0 if pref_s == "12-8" else min(PACK_MIN_SHIFTS, max_target)
                             supp_s = "12-8" if pref_s == "E" else "D"
                             for d_int in range(1, month_days + 1):
                                 pack_now = sum(1 for v in sched[idx] if v == pref_s)
@@ -1802,7 +1803,7 @@ if st.session_state.step >= 3:
                             max_target = month_days - _toff3 - extra_leaves
                             if st.session_state.custom_targets and idx in st.session_state.custom_targets:
                                 max_target = st.session_state.custom_targets[idx]
-                            min_pack = min(PACK_MIN_SHIFTS, max_target)
+                            min_pack = 0 if pref_s == "12-8" else min(PACK_MIN_SHIFTS, max_target)
                             actual_pack = sum(1 for v in sched[idx] if v == pref_s)
                             if actual_pack < min_pack:
                                 supp_s = "12-8" if pref_s == "E" else ("D" if pref_s in ("N", "12-8") else "")
