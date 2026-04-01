@@ -1638,29 +1638,24 @@ if st.session_state.step >= 3:
                                         sched[idx][d_int] = pref_s
                                         break  # 每班別在此假日只優先排一人（下次輪到下一位）
 
-                        # ── 第三階段：兜底確保每位包班人員至少達到 15 班（下限保障）──
-                        # 不受公平分配目標限制，直接補足至 PACK_MIN_SHIFTS（特殊假別過多者除外）
-                        for idx, row in ai_df.iterrows():
-                            pref = cache_pref[idx]
-                            if pref == "": continue
-                            pref_s = get_pref_s(pref)
-
-                            extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
-                                                              target_off=_toff3)
-                            max_target = month_days - _toff3 - extra_leaves
-                            if st.session_state.custom_targets and idx in st.session_state.custom_targets:
-                                max_target = st.session_state.custom_targets[idx]
-                            min_pack = min(PACK_MIN_SHIFTS, max_target)  # 不超過應上班天數
-
-                            current_count = sum(1 for v in sched[idx] if v == pref_s)
-                            if current_count >= max_target: continue  # 已達應上班天數，跳過
-
-                            # 嘗試以包班班別補足至應上班天數（E/N 仍須遵守當日配額 & 勞基法）
-                            for d_int in range(1, month_days + 1):
-                                if sum(1 for v in sched[idx] if is_work(v)) >= max_target: break
-                                if en_quota_full3(pref_s, d_int): continue  # 當日額滿，跳過
-                                if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
-                                    sched[idx][d_int] = pref_s
+                        # ── 第三階段：均等補足至應上班天數 ──
+                        # 改用「日為外迴圈、人為內迴圈」，與第一、二階段相同結構
+                        # 每日讓「總出勤最少 → 包班班次最少」的人優先，確保公平填充至 max_target
+                        for d_int in range(1, month_days + 1):
+                            for pref_s in pref_s_set:
+                                if en_quota_full3(pref_s, d_int): continue
+                                group3 = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
+                                if not group3: continue
+                                group3_sorted = sorted(group3, key=lambda i: (
+                                    sum(1 for v in sched[i] if is_work(v)),        # 總出勤最少者優先
+                                    sum(1 for v in sched[i] if v == pref_s),       # 包班班次最少者次之
+                                    i
+                                ))
+                                for idx in group3_sorted:
+                                    if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
+                                    if en_quota_full3(pref_s, d_int): break
+                                    if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
+                                        sched[idx][d_int] = pref_s
 
                         # ── 第四階段：包班天數讓渡均衡 ─────────────────────────
                         # 若仍有人未達 15 班下限，嘗試從同組班次較多的人員讓渡可交換的日期
