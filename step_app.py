@@ -602,6 +602,57 @@ def build_colored_excel(final_sched_df, stats_df, explanation_df, shortages_expo
             ws5.column_dimensions[get_column_letter(col_idx)].width = 12
         ws5.freeze_panes = ws5.cell(row=6, column=3)
 
+    # === 工作表 6：欠班歷史 ===
+    ws6 = wb.create_sheet("📊 欠班歷史")
+
+    # 備注行（第 1 列）
+    note_cell = ws6.cell(row=1, column=1,
+        value="本工作表可作為次月排班參考，欠班天數 > 0 者建議次月優先保留平日排班空間。")
+    note_cell.font = Font(italic=True, size=10, color="555555")
+    ws6.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
+    ws6.row_dimensions[1].height = 20
+
+    # 標題列（第 2 列）
+    _h6_cols = ["姓名", "本月應上班", "本月實際上班", "欠班天數", "欠班原因提示"]
+    _h6_fill = PatternFill(start_color="4A4A4A", end_color="4A4A4A", fill_type="solid")
+    for _ci6, _hname in enumerate(_h6_cols, 1):
+        _hc = ws6.cell(row=2, column=_ci6, value=_hname)
+        _hc.font = Font(bold=True, color="FFFFFF", size=10)
+        _hc.fill = _h6_fill
+        _hc.alignment = Alignment(horizontal="center")
+
+    # 準備資料
+    _red_fill6  = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+    _red_font6  = Font(color="721C24")
+    _ok_font6   = Font(color="155724")
+
+    _stats_for6 = stats_df[["姓名", "目標上班", "實際上班"]].copy() if "目標上班" in stats_df.columns else pd.DataFrame()
+
+    for _ri6, (_, _sr) in enumerate(_stats_for6.iterrows(), 3):
+        _name6    = _sr.get("姓名", "")
+        _target6  = int(_sr.get("目標上班", 0))
+        _actual6  = int(_sr.get("實際上班", 0))
+        _deficit6 = max(0, _target6 - _actual6)
+        _hint6    = "請確認假日資格 / 特殊假別數量 / 配額設定" if _deficit6 > 0 else "正常"
+
+        _row_data6 = [_name6, _target6, _actual6, _deficit6, _hint6]
+        for _ci6, _val6 in enumerate(_row_data6, 1):
+            _c6 = ws6.cell(row=_ri6, column=_ci6, value=_val6)
+            _c6.alignment = Alignment(horizontal="left" if _ci6 in (1, 5) else "center")
+            if _deficit6 > 0:
+                _c6.fill = _red_fill6
+                _c6.font = _red_font6
+            else:
+                _c6.font = _ok_font6
+
+    # 欄寬
+    ws6.column_dimensions["A"].width = 14
+    ws6.column_dimensions["B"].width = 14
+    ws6.column_dimensions["C"].width = 14
+    ws6.column_dimensions["D"].width = 12
+    ws6.column_dimensions["E"].width = 42
+    ws6.freeze_panes = ws6.cell(row=3, column=1)
+
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
@@ -1388,7 +1439,7 @@ if st.session_state.step >= 3:
                         sat_list3 = st.session_state.saturdays_list
                         sun_list3 = st.session_state.sundays_list
                         nat_list3 = st.session_state.nat_holidays_list
-                        illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
+                        illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
                         # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
                         # 均等化互換時，這些格的班別不可被移走
@@ -1826,6 +1877,66 @@ if st.session_state.step >= 3:
 
         display_safety_radar(st.session_state.pack_sched, edited_quota_df, st.session_state.ai_df)
 
+        # ── 空格充裕度預警（進入第四步前）──────────────────────────────────────
+        _sat_pw = st.session_state.saturdays_list
+        _sun_pw = st.session_state.sundays_list
+        _nat_pw = st.session_state.nat_holidays_list
+        _hol_set_pw = set(_sat_pw) | set(_sun_pw) | set(_nat_pw)
+        _weekday_count_pw = sum(1 for _d in range(1, month_days + 1) if _d not in _hol_set_pw)
+        _toff_pw = st.session_state.target_off
+
+        # 計算 personal_targets（與第四步相同邏輯）
+        _pt_pw = {}
+        for _idx_pw, _row_pw in ai_df.iterrows():
+            _title_pw = str(_row_pw.get("職稱", "")).strip()
+            if _title_pw in NO_HOL_SET:
+                _el_pw = calc_extra_leaves(_row_pw, month_days, _sat_pw, _sun_pw, _nat_pw, target_off=0)
+                _pt_pw[_idx_pw] = max(0, _weekday_count_pw - _el_pw)
+            else:
+                _el_pw = calc_extra_leaves(_row_pw, month_days, _sat_pw, _sun_pw, _nat_pw, target_off=_toff_pw)
+                _pt_pw[_idx_pw] = max(0, month_days - _toff_pw - _el_pw)
+        if st.session_state.get("custom_targets"):
+            for _idx_pw in ai_df.index:
+                if _idx_pw in st.session_state.custom_targets:
+                    _pt_pw[_idx_pw] = st.session_state.custom_targets[_idx_pw]
+
+        # 一般護理師：職稱不在 ADMIN_TITLES 且包班意願為空白
+        _gen_pw = [
+            _i for _i, _r in ai_df.iterrows()
+            if str(_r.get("職稱", "")).strip() not in ADMIN_TITLES
+            and str(_r.get("包班意願", "")).strip() == ""
+        ]
+
+        _total_slots_pw = month_days * len(_gen_pw)
+
+        # 掃描 pack_sched
+        _pack_df_pw = st.session_state.pack_sched
+        _day_cols_pw = [str(_d) for _d in range(1, month_days + 1)]
+        _filled_pw   = 0   # 非空格（任何已有值的格子）
+        _worked_pw   = {}  # 各護理師已排工作班數（供欠班計算）
+        for _i_pw in _gen_pw:
+            _w_pw = 0
+            for _dc_pw in _day_cols_pw:
+                _v_pw = str(_pack_df_pw.loc[_i_pw, _dc_pw] if _dc_pw in _pack_df_pw.columns else "").strip()
+                if _v_pw not in ("", "nan"):
+                    _filled_pw += 1
+                if is_work(_v_pw):
+                    _w_pw += 1
+            _worked_pw[_i_pw] = _w_pw
+
+        _remaining_pw = _total_slots_pw - _filled_pw
+        _deficit_pw   = sum(max(0, _pt_pw.get(_i_pw, 0) - _worked_pw.get(_i_pw, 0)) for _i_pw in _gen_pw)
+
+        if _remaining_pw < _deficit_pw:
+            st.error(
+                f"⚠️ 預警：剩餘可排空格（{_remaining_pw} 格）少於欠班缺口（{_deficit_pw} 天），"
+                f"建議回頭提高每日配額或減少包班天數。"
+            )
+        else:
+            st.success(
+                f"✅ 空格充裕，剩餘 {_remaining_pw} 格，欠班缺口 {_deficit_pw} 天，繼續排班無虞。"
+            )
+
         if st.session_state.step == 3:
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
@@ -1909,7 +2020,7 @@ if st.session_state.step >= 4:
                             if idx in st.session_state.custom_targets:
                                 personal_targets[idx] = st.session_state.custom_targets[idx]
 
-                    illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
+                    illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
                     # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
                     # E/N 均等化互換時，這些格的班別不可被移走
@@ -2080,7 +2191,7 @@ if st.session_state.step >= 4:
                     # 策略一（優先）：四格互換 — over[X]=E/N→"", under[X]=""→E/N,
                     #                            under[Y]=D→"",  over[Y]=""→D
                     # 策略二（備用）：單格轉讓 — 僅在 under 仍低於 personal_targets 時使用
-                    _il4_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+                    _il4_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
 
                     def _can_en_nocheck4(n_idx, s, d_int):
                         """d_int 可合法排 E 或 N（不含 personal_targets 上限，適用互換）"""
@@ -2521,6 +2632,64 @@ if st.session_state.step >= 4:
 
         display_safety_radar(st.session_state.night_sched, edited_quota_df, st.session_state.ai_df)
 
+        # ── 假日人力覆蓋率摘要 ───────────────────────────────────────────────────
+        st.write("#### 📅 假日人力覆蓋率摘要")
+        _hol_sat4  = st.session_state.saturdays_list
+        _hol_sun4  = st.session_state.sundays_list
+        _hol_nat4  = st.session_state.nat_holidays_list
+        _hol_all4  = sorted(set(_hol_sat4) | set(_hol_sun4) | set(_hol_nat4))
+        _fw4       = st.session_state.first_wday          # 0=Mon … 6=Sun
+        _wday_lbl  = ["一", "二", "三", "四", "五", "六", "日"]
+        _night_df4 = st.session_state.night_sched
+
+        # 建立職稱快取（用於排除 NO_HOL_ADMIN）
+        _title_cache4 = {i: str(ai_df.loc[i, "職稱"]).strip() for i in ai_df.index}
+
+        _hol_rows4 = []
+        _has_critical4 = False
+        for _hd4 in _hol_all4:
+            _hd_str4 = str(_hd4)
+            # 當日 D班配額
+            _quota_d4 = int(edited_quota_df.iloc[_hd4 - 1]["D班"]) if _hd4 <= len(edited_quota_df) else 0
+            # 計算已有班別人數（排除 NO_HOL_ADMIN）
+            _worked_hd4 = 0
+            if _hd_str4 in _night_df4.columns:
+                for _i4 in ai_df.index:
+                    if _title_cache4[_i4] in NO_HOL_ADMIN:
+                        continue
+                    _v4 = str(_night_df4.loc[_i4, _hd_str4] if _i4 in _night_df4.index else "").strip()
+                    if is_work(_v4):
+                        _worked_hd4 += 1
+            # 星期別
+            _wd4 = (_fw4 + _hd4 - 1) % 7
+            if _hd4 in set(_hol_nat4) and _hd4 not in set(_hol_sat4) | set(_hol_sun4):
+                _wlabel4 = f"國定({_wday_lbl[_wd4]})"
+            elif _hd4 in set(_hol_sat4):
+                _wlabel4 = "週六"
+            else:
+                _wlabel4 = "週日"
+            # 覆蓋率
+            _cov4 = (_worked_hd4 / _quota_d4 * 100) if _quota_d4 > 0 else 0.0
+            if _cov4 < 60:
+                _status4 = "🚨 嚴重不足"
+                _has_critical4 = True
+            elif _cov4 < 100:
+                _status4 = "⚠️ 部分不足"
+            else:
+                _status4 = "✅ 已達標"
+            _hol_rows4.append({
+                "日期": _hd4,
+                "星期別": _wlabel4,
+                "D班配額": _quota_d4,
+                "已排人數": _worked_hd4,
+                "覆蓋率": f"{_cov4:.0f}%",
+                "狀態": _status4,
+            })
+
+        st.dataframe(pd.DataFrame(_hol_rows4), use_container_width=False, hide_index=True)
+        if _has_critical4:
+            st.warning("⚠️ 以上假日人力不足，建議至護理師名單調整『能上週六/週日/國定假日』欄位後重排。")
+
         if st.session_state.step == 4:
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
@@ -2623,7 +2792,7 @@ if st.session_state.step >= 5:
             # 統合保護集合：均等化互換時，這些 (人員, 日期) 組合的班次不可被移動
             _locked_set5 = _prewhite_set5 | _mand_hol_set5 | _gongcha_set5 | _class_set5
 
-            illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
+            illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
             def can_work_base(n_idx, s, d_int, strict_wow=True):
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
@@ -3055,7 +3224,7 @@ if st.session_state.step >= 5:
             # 對象：具夜班資格、非包班、非行政職、仍有欠班的一般護理師
             # 優先補工作日，假日若有缺也補；配額嚴守上限（不使用緩衝）
             _hol_set_p3 = set(sat_list5) | set(sun_list5) | set(nat_list5)
-            _il_p3 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            _il_p3 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
             for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
                 if cache_pref[n_idx]: continue          # 包班人員：只排其包班班別
@@ -3275,6 +3444,117 @@ if st.session_state.step >= 5:
             st.dataframe(_tw_df, use_container_width=False, hide_index=True)
         else:
             st.success("✅ 12-8 + 白班已全數排入，所有人上班天數完美符合應上班天數！")
+
+        # ── 換班配對推薦（僅在最終班表產出後顯示）──────────────────────────────
+        if st.session_state.get("final_sched") is not None:
+            st.write("#### 🔄 換班配對推薦")
+
+            _pt_sw   = st.session_state.personal_targets
+            _fs_sw   = st.session_state.final_sched
+            _dcols_sw = [str(_d) for _d in range(1, month_days + 1)]
+            _sat_sw  = set(st.session_state.saturdays_list)
+            _sun_sw  = set(st.session_state.sundays_list)
+            _nat_sw  = set(st.session_state.nat_holidays_list)
+            _hol_sw  = _sat_sw | _sun_sw | _nat_sw
+            _il_sw   = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
+
+            # 計算每人實際上班天數
+            _wk_sw = {
+                _i: sum(1 for _dc in _dcols_sw
+                        if is_work(str(_fs_sw.at[_i, _dc] if _dc in _fs_sw.columns else "").strip()))
+                for _i in ai_df.index
+            }
+
+            # 欠班人員（依欠差降冪）
+            _under_sw = sorted(
+                [_i for _i in ai_df.index if _wk_sw[_i] < _pt_sw.get(_i, 0)],
+                key=lambda _i: _pt_sw.get(_i, 0) - _wk_sw[_i],
+                reverse=True
+            )
+            # 超班人員
+            _over_sw = [_i for _i in ai_df.index if _wk_sw[_i] > _pt_sw.get(_i, 0)]
+
+            def _consec_sw(nidx, day):
+                """排入 day 後，連續工作天 ≤ 5？"""
+                _c = 1
+                for _b in range(day - 1, 0, -1):
+                    if is_work(str(_fs_sw.at[nidx, str(_b)] if str(_b) in _fs_sw.columns else "").strip()): _c += 1
+                    else: break
+                for _f in range(day + 1, month_days + 1):
+                    if is_work(str(_fs_sw.at[nidx, str(_f)] if str(_f) in _fs_sw.columns else "").strip()): _c += 1
+                    else: break
+                return _c <= 5
+
+            def _adj_sw(nidx, shift, day):
+                """鄰班合法性（illegal_next）"""
+                _y = str(_fs_sw.at[nidx, str(day - 1)] if day > 1 and str(day - 1) in _fs_sw.columns else "").strip()
+                _t = str(_fs_sw.at[nidx, str(day + 1)] if day < month_days and str(day + 1) in _fs_sw.columns else "").strip()
+                _yb = "D" if (_y.startswith("D") or _y in ("上課", "公差")) else _y
+                _tb = "D" if (_t.startswith("D") or _t in ("上課", "公差")) else _t
+                if is_work(_y) and shift in _il_sw.get(_yb, []): return False
+                if is_work(_t) and _tb in _il_sw.get(shift, []): return False
+                return True
+
+            def _hol_sw_ok(nidx, day):
+                """假日出勤資格"""
+                if day not in _hol_sw: return True
+                if day in _sat_sw and str(ai_df.at[nidx, "能上週六"]).strip() != "是": return False
+                if day in _sun_sw and str(ai_df.at[nidx, "能上週日"]).strip() != "是": return False
+                if day in _nat_sw and str(ai_df.at[nidx, "能上國定假日"]).strip() != "是": return False
+                return True
+
+            _recs_sw = []
+            _done_under = set()
+
+            for _un in _under_sw:
+                if _un in _done_under: continue
+                for _d in range(1, month_days + 1):
+                    _dkey = str(_d)
+                    if _dkey not in _fs_sw.columns: continue
+                    if str(_fs_sw.at[_un, _dkey] if _un in _fs_sw.index else "").strip() not in ("", "nan"):
+                        continue  # 非空格跳過
+                    for _ov in _over_sw:
+                        if _ov == _un: continue
+                        _ov_val = str(_fs_sw.at[_ov, _dkey] if _ov in _fs_sw.index else "").strip()
+                        if not is_work(_ov_val): continue
+                        # 條件一：移出後超班者仍 >= personal_targets
+                        if _wk_sw[_ov] - 1 < _pt_sw.get(_ov, 0): continue
+                        # 條件二：連五上限
+                        if not _consec_sw(_un, _d): continue
+                        # 條件三：鄰班規則（用班別基底比對）
+                        _shift_base = "D" if _ov_val.startswith("D") else _ov_val
+                        if not _adj_sw(_un, _shift_base, _d): continue
+                        # 條件四：假日出勤資格
+                        if not _hol_sw_ok(_un, _d): continue
+                        # ✅ 配對成功
+                        _recs_sw.append({
+                            "欠班者":   ai_df.at[_un, "姓名"],
+                            "超班者":   ai_df.at[_ov, "姓名"],
+                            "換班日期": _d,
+                            "班別":     _ov_val,
+                            "_un":      _un,
+                            "_ov":      _ov,
+                        })
+                        _done_under.add(_un)
+                        break
+                    if _un in _done_under: break
+
+            if _recs_sw:
+                st.dataframe(
+                    pd.DataFrame(_recs_sw)[["欠班者", "超班者", "換班日期", "班別"]],
+                    use_container_width=False, hide_index=True
+                )
+                if st.button("✅ 套用所有推薦換班", key="btn_apply_swap_recs"):
+                    _fs_new = st.session_state.final_sched.copy()
+                    for _rec in _recs_sw:
+                        _dk = str(_rec["換班日期"])
+                        _fs_new.at[_rec["_un"], _dk] = _rec["班別"]
+                        _fs_new.at[_rec["_ov"], _dk] = ""
+                    st.session_state.final_sched = _fs_new
+                    st.rerun()
+            else:
+                st.info("✅ 目前無欠班情形，或欠班人員已無法找到合法換班配對，無推薦換班。")
+
         with st.expander("📄 點擊展開白班排班結果", expanded=True):
             _edit_d = st.checkbox("🖊️ 開啟手動編輯模式", value=False, key="chk_edit_d_sched")
             if _edit_d:
@@ -3352,7 +3632,7 @@ if st.session_state.step >= 6:
             nat_list6 = st.session_state.nat_holidays_list
             personal_targets = st.session_state.personal_targets
 
-            illegal_next = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            illegal_next = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
 
             # ── 第六步週末 A/B 組別補強：優先補足週末 D 班組別最低配額 ──
             _sat6p = set(sat_list6)
@@ -3462,7 +3742,7 @@ if st.session_state.step >= 6:
                     # 勞基法：11 小時間距 + 連五
                     y_s6 = sched[n_idx][d_int - 1] if d_int > 1 else ""
                     t_s6 = sched[n_idx][d_int + 1] if d_int < month_days else ""
-                    _il = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+                    _il = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
                     _ys_k = "D" if (y_s6.startswith("D") or y_s6 in ("上課", "公差")) else y_s6
                     _ts_k = "D" if (t_s6.startswith("D") or t_s6 in ("上課", "公差")) else t_s6
                     if is_work(y_s6) and eff_fill6 in _il.get(_ys_k, []): continue
@@ -3495,7 +3775,7 @@ if st.session_state.step >= 6:
 
             # ── 清尾補班 Pass 2：夜班資格者補 E / N / 12-8（D 班已窮盡後）──────
             _hol_set6p2 = set(sat_list6) | set(sun_list6) | set(nat_list6)
-            _il_p2 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            _il_p2 = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
             for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
                 if cache_pref[n_idx]: continue            # 包班人員已由上方 Pass 處理
@@ -3597,7 +3877,7 @@ if st.session_state.step >= 6:
                 and cache_night6[i] != ""
             ]
             _night_elig_set6 = set(_night_elig6)
-            _il6_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            _il6_eq = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
 
             def _can_12_8_nocheck6(n_idx, d_int):
                 """Step 6：d_int 可合法排 12-8（不含 personal_targets 上限，適用互換）"""
@@ -3696,7 +3976,7 @@ if st.session_state.step >= 6:
 
             # ── 第六步欠班診斷：清尾補班後仍有欠班時，收集原因 ─────────────
             _hol_set6d = set(sat_list6) | set(sun_list6) | set(nat_list6)
-            _il6d = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": ["D","E","12-8"]}
+            _il6d = {"D": ["N"], "E": ["D","N","12-8"], "12-8": ["N"], "N": []}
             _s6_deficits = []
             for n_idx in ai_df.index:
                 _worked6f = sum(1 for v in sched[n_idx] if is_work(v))
@@ -4110,7 +4390,7 @@ if st.session_state.step >= 6:
 
         with col_btn_download:
             st.download_button(
-                label="📥 下載全彩大禮包 (含結算與差異分析)",
+                label="📥 下載班表",
                 data=output.getvalue(),
                 file_name="Final_Schedule_Colored.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
