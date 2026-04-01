@@ -1604,16 +1604,17 @@ if st.session_state.step >= 3:
                             for pref_s in pref_s_set:
                                 group = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
                                 if not group: continue
-                                # 主排：本班別累計班數升序；次排：連班型態（填空隙>延伸>孤立）
+                                # 主排：本班別累計班數升序；次排：索引（穩定、公平）
+                                # 移除連班型態加分，防止早取班者形成正反饋連排優勢
                                 group_sorted = sorted(group, key=lambda i: (
                                     sum(1 for v in sched[i] if v == pref_s),
-                                    pack_streak_key3(i, d_int),
                                     i
                                 ))
                                 for idx in group_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
-                                    # 公平分配上限：超過每人均分目標則暫停，待兜底階段補足
-                                    if sum(1 for v in sched[idx] if v == pref_s) >= pack_fair_target.get(pref_s, PACK_MIN_SHIFTS): continue
+                                    # 公平分配上限：Stage 1 最多排到 PACK_MIN_SHIFTS（15班下限）
+                                    # 超過後暫停，由 Stage 3 日外迴圈均等補足至 max_target
+                                    if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
                                     if en_quota_full3(pref_s, d_int): break  # 當日額滿，跳下一班別
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
@@ -1631,8 +1632,8 @@ if st.session_state.step >= 3:
                                 )
                                 for idx in group_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
-                                    # 公平分配上限：超過每人均分目標則暫停
-                                    if sum(1 for v in sched[idx] if v == pref_s) >= pack_fair_target.get(pref_s, PACK_MIN_SHIFTS): continue
+                                    # 公平分配上限：Stage 2 同樣最多到 PACK_MIN_SHIFTS（15班）
+                                    if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
                                     if en_quota_full3(pref_s, d_int): break  # 此假日 E/N 額已滿
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
