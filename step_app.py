@@ -172,6 +172,7 @@ def _shift_norm(v):
 # ── A/B 組別排班條件 ─────────────────────────────────────────────
 # 硬性上限：12-8 每日 A≤3 B≤3；E 每日 A≤2 B≤2
 # 軟性最低保障（評分加分）：週六 D 班 A≥3；週日 D 班 A≥2 B≥2
+# A/B 互排規則：A 組可排入 B 組（A 超額後借用 B 剩餘空間），B 組不可排入 A 組
 _GROUP_SHIFT_CAP = {"12-8": {"A": 3, "B": 3}, "E": {"A": 2, "B": 2}}
 _GROUP_D_SAT_MIN = {"A": 3}
 _GROUP_D_SUN_MIN = {"A": 2, "B": 2}
@@ -181,6 +182,10 @@ def group_cap_ok(n_idx, s, d_int, sched_dict, cache_group_local):
     回傳 True = 該護理師可在 d_int 排 s 班（組別人數未超上限）。
     僅對 12-8 / E 班做硬性組別人數管制；D 班最低保障由評分機制處理。
     無組別設定（空白）者不受限制。
+
+    A/B 互排規則：
+      A 組：自身配額未滿時直接允許；自身配額已滿時可借用 B 組剩餘空間（A 可排入 B）。
+      B 組：只能使用自身配額，不可借用 A 組空間（B 不可排入 A）。
     """
     grp = cache_group_local.get(n_idx, "")
     if grp not in ("A", "B"):
@@ -188,12 +193,22 @@ def group_cap_ok(n_idx, s, d_int, sched_dict, cache_group_local):
     caps = _GROUP_SHIFT_CAP.get(s)
     if not caps:
         return True
-    cap = caps.get(grp, 999)
-    curr = sum(
-        1 for i, sv in sched_dict.items()
-        if cache_group_local.get(i, "") == grp and sv[d_int] == s
-    )
-    return curr < cap
+
+    cap_a = caps.get("A", 999)
+    cap_b = caps.get("B", 999)
+    curr_a = sum(1 for i, sv in sched_dict.items()
+                 if cache_group_local.get(i, "") == "A" and sv[d_int] == s)
+    curr_b = sum(1 for i, sv in sched_dict.items()
+                 if cache_group_local.get(i, "") == "B" and sv[d_int] == s)
+
+    if grp == "A":
+        # A 組：先用自身配額，滿了可借用 B 組剩餘空間
+        if curr_a < cap_a:
+            return True
+        return curr_b < cap_b   # A 超額後借 B 組空間
+    else:
+        # B 組：只能使用自身配額，不可排入 A 組空間
+        return curr_b < cap_b
 
 def group_d_score(n_idx, d_int, sat_set, sun_set, sched_dict, cache_group_local):
     """
@@ -1625,10 +1640,16 @@ if st.session_state.step >= 3:
                             for pref_s in pref_s_set:
                                 group = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
                                 if not group: continue
-                                # 依全月總班數升序排列（少者優先）
+                                # 主排：假日出勤最少者優先（均衡假日負擔）
+                                # 次排：包班班次最少者；末排：索引
+                                _hol_set_s2 = set(sat_list3) | set(sun_list3) | set(nat_list3)
                                 group_sorted = sorted(
                                     group,
-                                    key=lambda i: (sum(1 for v in sched[i] if v == pref_s), i)
+                                    key=lambda i: (
+                                        sum(1 for hd in _hol_set_s2 if is_work(sched[i][hd])),
+                                        sum(1 for v in sched[i] if v == pref_s),
+                                        i
+                                    )
                                 )
                                 for idx in group_sorted:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
@@ -1647,10 +1668,11 @@ if st.session_state.step >= 3:
                                 if en_quota_full3(pref_s, d_int): continue
                                 group3 = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
                                 if not group3: continue
+                                _hol_set_s3 = set(sat_list3) | set(sun_list3) | set(nat_list3)
                                 group3_sorted = sorted(group3, key=lambda i: (
-                                    sum(1 for v in sched[i] if is_work(v)),                                # 總出勤最少者優先
-                                    sum(1 for v in sched[i] if v == pref_s),                              # 包班班次最少者次之
-                                    -(max_target3[i] - sum(1 for v in sched[i] if v == pref_s))           # 距目標缺口最大者再優先
+                                    sum(1 for v in sched[i] if is_work(v)),                               # 總出勤最少者優先
+                                    sum(1 for hd in _hol_set_s3 if is_work(sched[i][hd])),               # 假日出勤最少者次之
+                                    sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 達標比例最低者再優先
                                 ))
                                 _day_placed3 = 0   # 本日已排入人數
                                 _day_limit3 = max(1, len(group3) // 2)  # 每日最多排入半數人員
@@ -2429,11 +2451,17 @@ if st.session_state.step >= 4:
                         if not week_variety_ok(sched, n_idx, "12-8", d_int, st.session_state.first_wday, month_days): return False
                         return True
 
-                    # 可排 12-8 人員：常規人員 + 包小夜人員（優先）；不含行政職稱
+                    # 可排 12-8 人員：常規人員 + 包小夜人員（優先）+ 欠班的 E 包班護師（補充班）
+                    # E 包班欠班者加入，讓她們在 Step 4 就能優先搶到 12-8，比 Step 5 更早一步
+                    _e_pack_deficit_s4 = {
+                        i for i in ai_df.index
+                        if "小夜" in cache_pref.get(i, "")
+                        and sum(1 for v in sched[i] if is_work(v)) < personal_targets.get(i, 0)
+                    }
                     elig_12_8_s4 = [
                         i for i in ai_df.index
                         if cache_title[i] not in ADMIN_TITLES
-                        and (cache_pref[i] == "" or "小夜" in cache_pref[i])
+                        and (cache_pref[i] == "" or "小夜" in cache_pref[i] or i in _e_pack_deficit_s4)
                     ]
                     total_12_8_demand_s4 = sum(
                         int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0]["12-8"])
@@ -2487,6 +2515,10 @@ if st.session_state.step >= 4:
                                         night_count = sum(1 for v in sched[idx] if v in ("E", "N", "12-8"))
                                         score = 0
                                         if "小夜" in cache_pref[idx]: score += 100_000_000  # 包小夜優先
+                                        # 欠班的 E 包班護師：極高優先（僅次於包小夜本人），讓她們先搶到 12-8 補充班
+                                        if idx in _e_pack_deficit_s4:
+                                            _deficit_days = personal_targets.get(idx, 0) - sum(1 for v in sched[idx] if is_work(v))
+                                            score += 80_000_000 + _deficit_days * 1_000_000  # 欠越多越優先
                                         if idx in elig_night_s4:
                                             score += (target_night_s4 - night_count) * 5_000_000
                                         else:
@@ -3173,12 +3205,9 @@ if st.session_state.step >= 5:
                 _pref5 = cache_pref[n_idx]
                 if _pref5:
                     _ps5 = "N" if "大夜" in _pref5 else ("E" if "小夜" in _pref5 else ("12-8" if "中" in _pref5 else "D"))
-                    # N 包班 / 12-8 包班：若仍欠班則允許補 D 班（N→D / 12-8→D 均合法）
-                    # E 包班：E→D 違規，維持只補 E 或 12-8
-                    if _ps5 in ("N", "12-8"):
-                        f_s = "D"   # 補白班，打破12-8配額瓶頸
-                    else:
-                        f_s = _ps5  # E包班維持原邏輯
+                    # N 包班 / 12-8 包班：仍欠班時允許補 D 班（N→D、12-8→D 均合法）
+                    # E 包班：E→D 違規，維持原邏輯只補 E 或 12-8
+                    f_s = "D" if _ps5 in ("N", "12-8") else _ps5
                 else:
                     f_s = "D"
                 for strict_wow, _wv_override in [(True, False), (False, False), (False, True)]:
