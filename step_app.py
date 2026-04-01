@@ -953,6 +953,54 @@ with st.sidebar:
     st.divider()
     st.caption("💡 建議每完成一個步驟就存一次，避免重新整理後資料遺失。")
 
+    st.divider()
+    st.markdown("## 🔍 班表驗證站")
+    st.caption("上傳手動微調後的班表 Excel，秒速檢查勞基法與人力安全")
+    _val_file = st.file_uploader(
+        "上傳微調後的班表 Excel", type=["xlsx"], key="validator_upload"
+    )
+    if _val_file and st.session_state.get("ai_df") is not None:
+        try:
+            _ai = st.session_state.ai_df
+            _quota = st.session_state.get("edited_quota_df") or st.session_state.get("quota_df")
+            _md = st.session_state.month_days
+            # 讀取上傳的班表（取第一個工作表）
+            _val_xl = pd.read_excel(_val_file, sheet_name=0, header=0)
+            # 對齊姓名索引：依上傳班表的「姓名」欄與 ai_df 的姓名對齊
+            _name_col = [c for c in _val_xl.columns if "姓名" in str(c)]
+            if not _name_col:
+                st.error("找不到「姓名」欄，請確認上傳的班表格式正確")
+            else:
+                _val_xl = _val_xl.rename(columns={_name_col[0]: "姓名"})
+                _day_cols_v = [str(d) for d in range(1, _md + 1)]
+                # 依 ai_df 的姓名順序重排上傳班表
+                _ai_names = _ai["姓名"].str.strip().tolist()
+                _val_xl["姓名"] = _val_xl["姓名"].astype(str).str.strip()
+                _val_aligned = _ai[["姓名"]].copy().reset_index(drop=True)
+                for d in _day_cols_v:
+                    _val_aligned[d] = ""
+                for _, _vrow in _val_xl.iterrows():
+                    _vname = str(_vrow["姓名"]).strip()
+                    if _vname in _ai_names:
+                        _ridx = _ai_names.index(_vname)
+                        for d in _day_cols_v:
+                            if d in _vrow.index:
+                                _val_aligned.at[_ridx, d] = str(_vrow[d]).strip() if str(_vrow[d]).strip() not in ("nan", "NaN", "") else ""
+                st.success("班表解析成功，開始驗證...")
+                # 安全警示雷達
+                with st.expander("🚨 安全警示雷達", expanded=True):
+                    display_safety_radar(_val_aligned, _quota, _ai)
+                # 勞基法四週變形工時審查
+                with st.expander("⚖️ 勞基法審查", expanded=True):
+                    _pw_df, _viol_df = build_four_week_review(_val_aligned, _ai, _md)
+                    if "🚨" in " ".join(_viol_df["合法判斷"].tolist() if "合法判斷" in _viol_df.columns else []):
+                        st.error("發現勞基法違規")
+                    st.dataframe(_viol_df, use_container_width=True)
+        except Exception as _e:
+            st.error(f"解析失敗：{_e}，請確認上傳的班表格式與系統輸出的 Excel 格式一致")
+    elif _val_file and st.session_state.get("ai_df") is None:
+        st.warning("請先完成第一步（載入人員資料），再使用驗證站")
+
 st.title("🏥 層級式護理輔助排班工作站")
 st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.session_state.step} 步 / 共 7 步")
 
