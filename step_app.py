@@ -1873,6 +1873,46 @@ if st.session_state.step >= 3:
                     use_container_width=True
                 )
 
+        # ── 包班人員上班天數摘要 ──────────────────────────────────────────────
+        _pack_summary_rows = []
+        for _ps_idx, _ps_row in ai_df.iterrows():
+            _ps_pref = str(_ps_row.get("包班意願", "")).strip()
+            if _ps_pref == "": continue
+            _ps_pref_s = get_pref_s(_ps_pref)
+            _ps_el = calc_extra_leaves(_ps_row, month_days,
+                                       st.session_state.saturdays_list,
+                                       st.session_state.sundays_list,
+                                       st.session_state.nat_holidays_list,
+                                       target_off=st.session_state.target_off)
+            _ps_max = month_days - st.session_state.target_off - _ps_el
+            if st.session_state.get("custom_targets") and _ps_idx in st.session_state.custom_targets:
+                _ps_max = st.session_state.custom_targets[_ps_idx]
+            _ps_sched_vals = list(st.session_state.pack_sched.iloc[_ps_idx, 1:].values) if _ps_idx < len(st.session_state.pack_sched) else []
+            _ps_pack_cnt  = sum(1 for v in _ps_sched_vals if v == _ps_pref_s)
+            _ps_total_cnt = sum(1 for v in _ps_sched_vals if is_work(str(v).strip()))
+            _ps_supp_s    = "12-8" if _ps_pref_s == "E" else "D"
+            _ps_supp_cnt  = _supp_count(_ps_sched_vals, _ps_supp_s)
+            _ps_gap       = _ps_max - _ps_total_cnt
+            if _ps_gap <= 0:
+                _ps_status = "✅ 達標"
+            elif _ps_gap == 1:
+                _ps_status = "⚠️ 少 1 天"
+            else:
+                _ps_status = f"🚨 欠 {_ps_gap} 天"
+            _pack_summary_rows.append({
+                "姓名":        _ps_row["姓名"],
+                "包班班別":    _ps_pref_s,
+                f"{_ps_pref_s}班": _ps_pack_cnt,
+                "補充班":      _ps_supp_cnt,
+                "總出勤":      _ps_total_cnt,
+                "應上班":      _ps_max,
+                "狀態":        _ps_status,
+            })
+        if _pack_summary_rows:
+            with st.expander("📊 包班人員上班天數摘要", expanded=True):
+                _ps_df = pd.DataFrame(_pack_summary_rows)
+                st.dataframe(_ps_df, use_container_width=False, hide_index=True)
+
         display_safety_radar(st.session_state.pack_sched, edited_quota_df, st.session_state.ai_df)
 
         # ── 空格充裕度預警（進入第四步前）──────────────────────────────────────
@@ -2173,13 +2213,6 @@ if st.session_state.step >= 4:
                                         # 意義：N 接 O 完全合法，緩衝日與休假日重疊，省下一個排班空格
                                         if (d_int + 1) in cache_pre_off4.get(idx, set()):
                                             score += 5_000_000
-
-                                        # ── 夜班區塊化加分：鼓勵同班別連排，減少強制緩衝日浪費 ──
-                                        # N-N 或 E-E 連排只需一個緩衝日；N-O-N 則需兩個
-                                        _prev_s4 = sched[idx][d_int - 1] if d_int > 1 else ""
-                                        _next_s4 = sched[idx][d_int + 1] if d_int < month_days else ""
-                                        if _prev_s4 == s_type or _next_s4 == s_type:
-                                            score += 3_000_000  # 同班別連排加分
 
                                         # ── 剩餘容量預判：排入此夜班後，後續有效空格能否補滿應上班天數 ──
                                         # 保守估計：夜班後至少損失 1 個強制緩衝日，有效空格再減 1
