@@ -3387,6 +3387,84 @@ if st.session_state.step >= 5:
                         if _s3 in ("12-8", "E") and not group_cap_ok(n_idx, _s3, d_int, sched, cache_group5): continue
                         sched[n_idx][d_int] = _s3
 
+            # ── 補足 Final Pass：放寬週多樣性，補齊仍欠班人員 ──────────────────────────────
+            # 保留所有勞基法限制（連五 / 14日窗口 / 相鄰班別 / 配額），唯一放寬：週多樣性限制
+            # 僅對仍欠班的護師執行，不影響已達標人員
+            _hol_set_fp = set(sat_list5) | set(sun_list5) | set(nat_list5)
+            _il_fp = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": ["D", "E", "12-8"]}
+            for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
+                if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
+                _pref_fp = cache_pref[n_idx]
+                if _pref_fp:
+                    _fs_fp = "N" if "大夜" in _pref_fp else ("E" if "小夜" in _pref_fp else ("12-8" if "中" in _pref_fp else "D"))
+                else:
+                    _fs_fp = "D"
+                def _pat_fp(d):
+                    _y = sched[n_idx][d - 1] if d > 1 else ""
+                    _t = sched[n_idx][d + 1] if d < month_days else ""
+                    if is_work(_y) and is_work(_t): return 0
+                    if is_work(_y) or is_work(_t): return 1
+                    return 2
+                for d_int in sorted(range(1, month_days + 1), key=_pat_fp):
+                    if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
+                    if sched[n_idx][d_int] not in ["", "上課"]: continue
+                    _eff_fp = _fs_fp
+                    # 包班人員：E/N 配額滿則跳過（不改排白班）
+                    if _pref_fp and _eff_fp in ("E", "N"):
+                        _rq_fp = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        if not _rq_fp.empty:
+                            if sum(1 for i in ai_df.index if sched[i][d_int] == _eff_fp) >= int(_rq_fp.iloc[0][f"{_eff_fp}班"]):
+                                continue
+                    # 配額上限（D班平日允許緩衝3人，假日嚴守）
+                    _rq2_fp = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                    _is_hol_fp = d_int in _hol_set_fp
+                    if not _rq2_fp.empty:
+                        try:
+                            if _eff_fp == "D" and cache_title[n_idx] not in NO_HOL_ADMIN:
+                                _req_fp = int(_rq2_fp.iloc[0]["D班"])
+                                _cur_fp = sum(1 for i in ai_df.index if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D") and cache_title[i] not in NO_HOL_ADMIN)
+                                if _is_hol_fp:
+                                    if _cur_fp >= _req_fp: continue
+                                else:
+                                    if _cur_fp >= _req_fp + 3: continue
+                            elif _eff_fp == "12-8":
+                                if sum(1 for i in ai_df.index if sched[i][d_int] == "12-8") >= int(_rq2_fp.iloc[0]["12-8"]): continue
+                        except (KeyError, ValueError): pass
+                    # 假日出勤能力
+                    if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5, cache_can_nat5, sat_list5, sun_list5, nat_list5): continue
+                    if cache_title[n_idx] in NO_HOL_SET and _is_hol_fp: continue
+                    if cache_title[n_idx] in ADMIN_TITLES and _eff_fp != "D": continue
+                    # 上課日限制
+                    if str(d_int) in class_days_map.get(n_idx, []) and _eff_fp not in ("D", "N"): continue
+                    # 相鄰班別（勞基法）
+                    _y_fp = (sched[n_idx][d_int - 1] or "") if d_int > 1 else ""
+                    _t_fp = (sched[n_idx][d_int + 1] or "") if d_int < month_days else ""
+                    _yb_fp = "D" if (_y_fp.startswith("D") or _y_fp in ("上課", "公差")) else _y_fp
+                    _tb_fp = "D" if (_t_fp.startswith("D") or _t_fp in ("上課", "公差")) else _t_fp
+                    if is_work(_y_fp) and _eff_fp in _il_fp.get(_yb_fp, []): continue
+                    if is_work(_t_fp) and _tb_fp in _il_fp.get(_eff_fp, []): continue
+                    # 連五上限（勞基法）
+                    _sc_fp = 1
+                    for _bd_fp in range(d_int - 1, 0, -1):
+                        if is_work(sched[n_idx][_bd_fp]): _sc_fp += 1
+                        else: break
+                    for _fd_fp in range(d_int + 1, month_days + 1):
+                        if is_work(sched[n_idx][_fd_fp]): _sc_fp += 1
+                        else: break
+                    if _sc_fp > 5: continue
+                    # 14日12班窗口（勞基法）
+                    _14ok_fp = True
+                    _wm_fp = max(1, d_int - 13)
+                    _wx_fp = min(d_int, month_days - 13) if month_days >= 14 else 1
+                    for _sd_fp in range(_wm_fp, _wx_fp + 1):
+                        _ed_fp = min(month_days, _sd_fp + 13)
+                        _ww_fp = sum(1 for _cd in range(_sd_fp, _ed_fp + 1) if _cd != d_int and is_work(sched[n_idx][_cd]))
+                        if _ww_fp + 1 > 12: _14ok_fp = False; break
+                    if not _14ok_fp: continue
+                    # ★ week_variety_ok 此處刻意略過（Final Pass 的唯一放寬）
+                    if _eff_fp in ("12-8", "E") and not group_cap_ok(n_idx, _eff_fp, d_int, sched, cache_group5): continue
+                    sched[n_idx][d_int] = _eff_fp
+
             # ── 傷兵/助理 最終兜底：強制填滿所有平日空格（不套用任何勞基法限制）──────────────
             # 傷兵/助理：沒有預假，平日全上白班，不計入單位人力配額
             # 放在所有排班邏輯最後，確保不受任何約束漏排
