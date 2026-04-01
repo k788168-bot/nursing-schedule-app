@@ -1774,7 +1774,7 @@ if st.session_state.step >= 3:
                             pref = cache_pref[idx]
                             if pref == "": continue
                             pref_s = get_pref_s(pref)
-                            if pref_s not in ("E", "N"): continue  # 僅適用 E/N 包班護士
+                            if pref_s not in ("E", "N", "12-8"): continue  # 適用 E/N/12-8 包班護士
 
                             extra_leaves = calc_extra_leaves(row, month_days, sat_list3, sun_list3, nat_list3,
                                                               target_off=_toff3)
@@ -1783,7 +1783,7 @@ if st.session_state.step >= 3:
                                 max_target = st.session_state.custom_targets[idx]
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
 
-                            # E班包班不足 → 補12-8；N班包班不足 → 補D班
+                            # E班包班不足 → 補12-8；N班包班不足 → 補D班；12-8包班不足 → 補D班
                             supp_s = "12-8" if pref_s == "E" else "D"
 
                             for d_int in range(1, month_days + 1):
@@ -1809,7 +1809,7 @@ if st.session_state.step >= 3:
                             min_pack = min(PACK_MIN_SHIFTS, max_target)
                             actual_pack = sum(1 for v in sched[idx] if v == pref_s)
                             if actual_pack < min_pack:
-                                supp_s = "12-8" if pref_s == "E" else ("D" if pref_s == "N" else "")
+                                supp_s = "12-8" if pref_s == "E" else ("D" if pref_s in ("N", "12-8") else "")
                                 supp_count = _supp_count(sched[idx], supp_s) if supp_s else 0
                                 _pack_warnings3.append({
                                     "姓名": row["姓名"],
