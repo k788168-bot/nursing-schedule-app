@@ -1652,11 +1652,15 @@ if st.session_state.step >= 3:
                                     sum(1 for v in sched[i] if v == pref_s),                              # 包班班次最少者次之
                                     -(max_target3[i] - sum(1 for v in sched[i] if v == pref_s))           # 距目標缺口最大者再優先
                                 ))
+                                _day_placed3 = 0   # 本日已排入人數
+                                _day_limit3 = max(1, len(group3) // 2)  # 每日最多排入半數人員
                                 for idx in group3_sorted:
+                                    if _day_placed3 >= _day_limit3: break  # 本日已達上限，讓位給其他人
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
                                     if en_quota_full3(pref_s, d_int): break
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
+                                        _day_placed3 += 1
 
                         # ── 第四階段：包班天數讓渡均衡 ─────────────────────────
                         # 若仍有人未達 15 班下限，嘗試從同組班次較多的人員讓渡可交換的日期
@@ -3168,7 +3172,13 @@ if st.session_state.step >= 5:
                 # 包班人員補其包班班別；一般人員補 D
                 _pref5 = cache_pref[n_idx]
                 if _pref5:
-                    f_s = "N" if "大夜" in _pref5 else ("E" if "小夜" in _pref5 else ("12-8" if "中" in _pref5 else "D"))
+                    _ps5 = "N" if "大夜" in _pref5 else ("E" if "小夜" in _pref5 else ("12-8" if "中" in _pref5 else "D"))
+                    # N 包班 / 12-8 包班：若仍欠班則允許補 D 班（N→D / 12-8→D 均合法）
+                    # E 包班：E→D 違規，維持只補 E 或 12-8
+                    if _ps5 in ("N", "12-8"):
+                        f_s = "D"   # 補白班，打破12-8配額瓶頸
+                    else:
+                        f_s = _ps5  # E包班維持原邏輯
                 else:
                     f_s = "D"
                 for strict_wow, _wv_override in [(True, False), (False, False), (False, True)]:
