@@ -4336,7 +4336,7 @@ if st.session_state.step >= 6:
 
             # 休假統計
             off_count      = s_vals.count("O")                                          # 預休 / 長假
-            sp_leave_vals  = [v for v in s_vals if v not in ["","O","上課"] and not is_work(v)]  # 公假、喪假等
+            sp_leave_vals  = [str(v).strip() for v in s_vals if str(v).strip() not in ["","nan","O","上課"] and not is_work(str(v).strip())]  # 公假、喪假等
             sp_leave_count = len(sp_leave_vals)
             sp_leave_types = "、".join(sorted(set(sp_leave_vals))) if sp_leave_vals else "-"
 
