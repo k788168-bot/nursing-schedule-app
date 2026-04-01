@@ -3494,14 +3494,19 @@ if st.session_state.step >= 5:
                 for _i in ai_df.index
             }
 
-            # 欠班人員（依欠差降冪）
+            # 僅一般護理師（職稱不在 ADMIN_TITLES、包班意願為空白）可納入配對
+            _gen_sw = [_i for _i in ai_df.index
+                       if str(ai_df.at[_i, "職稱"]).strip() not in ADMIN_TITLES
+                       and str(ai_df.at[_i, "包班意願"]).strip() == ""]
+
+            # 欠班人員（依欠差降冪，僅一般護理師）
             _under_sw = sorted(
-                [_i for _i in ai_df.index if _wk_sw[_i] < _pt_sw.get(_i, 0)],
+                [_i for _i in _gen_sw if _wk_sw[_i] < _pt_sw.get(_i, 0)],
                 key=lambda _i: _pt_sw.get(_i, 0) - _wk_sw[_i],
                 reverse=True
             )
-            # 超班人員
-            _over_sw = [_i for _i in ai_df.index if _wk_sw[_i] > _pt_sw.get(_i, 0)]
+            # 超班人員（僅一般護理師）
+            _over_sw = [_i for _i in _gen_sw if _wk_sw[_i] > _pt_sw.get(_i, 0)]
 
             def _consec_sw(nidx, day):
                 """排入 day 後，連續工作天 ≤ 5？"""
