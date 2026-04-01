@@ -857,8 +857,8 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
                 b128 = sum(1 for i in nurses_128 if cache_group_radar.get(i) == "B")
                 if a128 < 3:
                     shortages.append(f"🚨 {day_str}號：12-8 班 A組僅 {a128} 人（需≥3）")
-                if b128 < 3:
-                    shortages.append(f"🚨 {day_str}號：12-8 班 B組僅 {b128} 人（需≥3）")
+                if b128 < 3 and (a128 + b128) < 6:  # A組已填補B組空缺時不警示
+                    shortages.append(f"🚨 {day_str}號：12-8 班 B組僅 {b128} 人（需≥3，A組補位後合計 {a128+b128} 人）")
 
             # E 小夜班：A組需2人、B組需2人（同上，僅在 E 班配額 > 0 時才檢查）
             _req_e_r = int(quota_df[quota_df["日期"] == day_str].iloc[0]["E班"]) if not quota_df[quota_df["日期"] == day_str].empty else 0
@@ -868,8 +868,8 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
                 be = sum(1 for i in nurses_e if cache_group_radar.get(i) == "B")
                 if ae < 2:
                     shortages.append(f"🚨 {day_str}號：E 班 A組僅 {ae} 人（需≥2）")
-                if be < 2:
-                    shortages.append(f"🚨 {day_str}號：E 班 B組僅 {be} 人（需≥2）")
+                if be < 2 and (ae + be) < 4:  # A組已填補B組空缺時不警示
+                    shortages.append(f"🚨 {day_str}號：E 班 B組僅 {be} 人（需≥2，A組補位後合計 {ae+be} 人）")
 
             # 週六白班：A組至少3人
             if d in sat_set_r:
@@ -889,8 +889,8 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
                 bd_sun = sum(1 for i in nurses_d_sun if cache_group_radar.get(i) == "B")
                 if ad_sun < 2:
                     shortages.append(f"⚠️ {day_str}號（週日）：D 班 A組僅 {ad_sun} 人（需≥2）")
-                if bd_sun < 2:
-                    shortages.append(f"⚠️ {day_str}號（週日）：D 班 B組僅 {bd_sun} 人（需≥2）")
+                if bd_sun < 2 and (ad_sun + bd_sun) < 4:  # A組已填補B組空缺時不警示
+                    shortages.append(f"⚠️ {day_str}號（週日）：D 班 B組僅 {bd_sun} 人（需≥2，A組補位後合計 {ad_sun+bd_sun} 人）")
     except Exception:
         pass
 
@@ -1651,14 +1651,17 @@ if st.session_state.step >= 3:
                                         i
                                     )
                                 )
+                                _day_placed2 = 0
+                                _day_limit2 = max(1, len(group) // 2)  # 每假日最多排半數，均衡假日分配
                                 for idx in group_sorted:
+                                    if _day_placed2 >= _day_limit2: break  # 本假日已達上限
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
                                     # 公平分配上限：Stage 2 同樣最多到 PACK_MIN_SHIFTS（15班）
                                     if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
                                     if en_quota_full3(pref_s, d_int): break  # 此假日 E/N 額已滿
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
-                                        break  # 每班別在此假日只優先排一人（下次輪到下一位）
+                                        _day_placed2 += 1
 
                         # ── 第三階段：均等補足至應上班天數 ──
                         # 改用「日為外迴圈、人為內迴圈」，與第一、二階段相同結構
