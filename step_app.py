@@ -1878,7 +1878,7 @@ if st.session_state.step >= 3:
         for _ps_idx, _ps_row in ai_df.iterrows():
             _ps_pref = str(_ps_row.get("包班意願", "")).strip()
             if _ps_pref == "": continue
-            _ps_pref_s = get_pref_s(_ps_pref)
+            _ps_pref_s = ("N" if "大夜" in _ps_pref else ("E" if "小夜" in _ps_pref else ("12-8" if "中" in _ps_pref else "D")))
             _ps_el = calc_extra_leaves(_ps_row, month_days,
                                        st.session_state.saturdays_list,
                                        st.session_state.sundays_list,
@@ -1891,7 +1891,7 @@ if st.session_state.step >= 3:
             _ps_pack_cnt  = sum(1 for v in _ps_sched_vals if v == _ps_pref_s)
             _ps_total_cnt = sum(1 for v in _ps_sched_vals if is_work(str(v).strip()))
             _ps_supp_s    = "12-8" if _ps_pref_s == "E" else "D"
-            _ps_supp_cnt  = _supp_count(_ps_sched_vals, _ps_supp_s)
+            _ps_supp_cnt  = sum(1 for v in _ps_sched_vals if (str(v).startswith("D") if _ps_supp_s == "D" else str(v) == _ps_supp_s))
             _ps_gap       = _ps_max - _ps_total_cnt
             if _ps_gap <= 0:
                 _ps_status = "✅ 達標"
