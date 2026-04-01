@@ -1787,9 +1787,6 @@ if st.session_state.step >= 3:
                             supp_s = "12-8" if pref_s == "E" else "D"
 
                             for d_int in range(1, month_days + 1):
-                                pack_now = sum(1 for v in sched[idx] if v == pref_s)
-                                # 包班班次尚未達到 15 班下限，不啟動補充班次
-                                if pack_now < min_pack: break
                                 # 總出勤天數已達應上班天數，停止補充
                                 if sum(1 for v in sched[idx] if is_work(v)) >= max_target: break
                                 if sched[idx][d_int] not in ["", "上課"]: continue
