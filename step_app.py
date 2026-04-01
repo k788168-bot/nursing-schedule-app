@@ -1653,12 +1653,12 @@ if st.session_state.step >= 3:
                             min_pack = min(PACK_MIN_SHIFTS, max_target)  # 不超過應上班天數
 
                             current_count = sum(1 for v in sched[idx] if v == pref_s)
-                            if current_count >= min_pack: continue  # 已達下限，跳過
+                            if current_count >= max_target: continue  # 已達應上班天數，跳過
 
-                            # 嘗試補足至 15 班（含假日天，不限順序；E/N 仍須遵守當日配額 & 勞基法）
+                            # 嘗試以包班班別補足至應上班天數（E/N 仍須遵守當日配額 & 勞基法）
                             for d_int in range(1, month_days + 1):
-                                if sum(1 for v in sched[idx] if v == pref_s) >= min_pack: break
-                                if en_quota_full3(pref_s, d_int): continue  # 當日 E/N 額滿，跳過
+                                if sum(1 for v in sched[idx] if is_work(v)) >= max_target: break
+                                if en_quota_full3(pref_s, d_int): continue  # 當日額滿，跳過
                                 if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                     sched[idx][d_int] = pref_s
 
@@ -1787,10 +1787,11 @@ if st.session_state.step >= 3:
                             supp_s = "12-8" if pref_s == "E" else "D"
 
                             for d_int in range(1, month_days + 1):
-                                # 包班班次 + 已補的補充班次合計
                                 pack_now = sum(1 for v in sched[idx] if v == pref_s)
-                                supp_now = _supp_count(sched[idx], supp_s)
-                                if pack_now + supp_now >= min_pack: break
+                                # 包班班次尚未達到 15 班下限，不啟動補充班次
+                                if pack_now < min_pack: break
+                                # 總出勤天數已達應上班天數，停止補充
+                                if sum(1 for v in sched[idx] if is_work(v)) >= max_target: break
                                 if sched[idx][d_int] not in ["", "上課"]: continue
                                 if en_quota_full3(supp_s, d_int): continue  # 當日配額已滿，不得超出
                                 if can_work_base(idx, supp_s, d_int) and group_cap_ok(idx, supp_s, d_int, sched, cache_group3):
