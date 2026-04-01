@@ -2216,6 +2216,18 @@ if st.session_state.step >= 4:
                                         if _next_is_rest4:
                                             score += 5_000_000
 
+                                        # ── Block Preference：同班別連排加分 + 異種夜班相鄰懲罰 ──
+                                        # 同班別連排：N-N / E-E / 12-8-12-8，夜班集中同週減少跨類型污染
+                                        _prev_b4 = sched[idx][d_int - 1] if d_int > 1 else ""
+                                        _next_b4 = sched[idx][d_int + 1] if d_int < month_days else ""
+                                        if _prev_b4 == s_type or _next_b4 == s_type:
+                                            score += 3_000_000   # 同班別連排，強力鼓勵
+                                        # 異種夜班相鄰懲罰：防止 N+E / E+12-8 黏在一起污染同一週
+                                        _night_types4 = ("E", "N", "12-8")
+                                        if (_prev_b4 in _night_types4 and _prev_b4 != s_type) or \
+                                           (_next_b4 in _night_types4 and _next_b4 != s_type):
+                                            score -= 2_500_000   # 異種夜班相鄰，懲罰
+
                                         # ── 剩餘容量預判：排入此夜班後，後續有效空格能否補滿應上班天數 ──
                                         # 保守估計：夜班後至少損失 1 個強制緩衝日，有效空格再減 1
                                         _worked_now4 = sum(1 for x in sched[idx] if is_work(x))
