@@ -688,9 +688,13 @@ def build_four_week_review(final_sched_df, ai_df, month_days):
     回傳：(per_week_df, violation_df)
     """
     # ── 班次時間表（用於 §34 換班間距計算） ─────────────────
-    # 以小時數表示，N 班結束於翌日 08:00 → 以 32h 計算
-    _SHIFT_END_H   = {"D": 16, "E": 24, "N": 32, "12-8": 20}
-    _SHIFT_START_H = {"D": 8,  "E": 16, "N": 24, "12-8": 12}
+    # D班：08:00–16:00  E班：16:00–24:00
+    # N班：00:00–08:00（大夜班於當日 00:00 開始、08:00 結束）
+    # 12-8班：12:00–20:00
+    # 換班間距計算：rest = (24 + 次日班開始時) - 當日班結束時
+    # 例：N(4號)→D(5號)：(24+8)-8 = 24h ≥ 11h → 合法
+    _SHIFT_END_H   = {"D": 16, "E": 24, "N": 8,  "12-8": 20}
+    _SHIFT_START_H = {"D": 8,  "E": 16, "N": 0,  "12-8": 12}
 
     def _timing_key(val):
         """將班別值對應到換班時間 key（D/E/N/12-8），非上班格回傳 None"""
@@ -4688,14 +4692,7 @@ if st.session_state.step >= 6:
         personal_targets = st.session_state.personal_targets
         st.success("✅ 完整班表已產生！（12-8 中班 + 白班 + 加班線均分）")
 
-        # ── 欠班明確警示（清尾補班後仍無法達標者）────────────────────
-        _s6d = st.session_state.get("s6_deficits", [])
-        if _s6d:
-            st.error(
-                f"⚠️ **欠班警示（{len(_s6d)} 人）**：以下人員在遵守勞基法及每日人力配額上限的前提下，"
-                f"清尾補班後仍無法達到應上班天數，請至手動編輯模式補排，或調整配額設定後重新計算："
-            )
-            st.dataframe(pd.DataFrame(_s6d), use_container_width=True, hide_index=True)
+
 
         shortages_export = display_safety_radar(st.session_state.final_sched, edited_quota_df, ai_df)
         st.session_state.shortages_export = shortages_export
@@ -4712,7 +4709,52 @@ if st.session_state.step >= 6:
             _view_df[_c] = _view_df[_c].apply(abbrev_display)
         # 預白班：D 格標為 Dx（視覺區分預排白班）
         _view_df = apply_prewhite_dx(_view_df, ai_df, month_days)
-        styled_final_df = _view_df.style.map(color_shifts, subset=_day_cols)
+        # ── 在班表最後附加每日各班別人數統計列 ──────────────────────────────
+        _sched_src = st.session_state.final_sched  # 用原始班表計算（未經顯示轉換）
+        _count_rows = []
+        for _shift_label, _shift_key in [("D班人數", "D"), ("E班人數", "E"), ("N班人數", "N"), ("12-8人數", "12-8")]:
+            _row = {"姓名": _shift_label}
+            for _dc in _day_cols:
+                if _shift_key == "D":
+                    _cnt = sum(
+                        1 for i in ai_df.index
+                        if isinstance(_sched_src.at[i, _dc], str)
+                        and _sched_src.at[i, _dc].upper().startswith("D")
+                        and str(ai_df.at[i, "職稱"]).strip() not in NO_HOL_ADMIN
+                    )
+                else:
+                    _cnt = sum(1 for i in ai_df.index if str(_sched_src.at[i, _dc]).strip() == _shift_key)
+                _row[_dc] = str(_cnt) if _cnt > 0 else "0"
+            _count_rows.append(_row)
+        _count_df = pd.DataFrame(_count_rows)
+        _view_with_counts = pd.concat([_view_df, _count_df], ignore_index=True)
+        def _color_count_row(row):
+            styles = [""] * len(row)
+            lbl = str(row.iloc[0])
+            if "D班" in lbl:
+                bg = "#dbeafe"; fg = "#1e40af"
+            elif "E班" in lbl:
+                bg = "#fef9c3"; fg = "#92400e"
+            elif "N班" in lbl:
+                bg = "#f3e8ff"; fg = "#6b21a8"
+            elif "12-8" in lbl:
+                bg = "#d1fae5"; fg = "#065f46"
+            else:
+                return styles
+            for j in range(len(styles)):
+                col_name = row.index[j]
+                val = str(row.iloc[j])
+                if col_name == "姓名":
+                    styles[j] = f"background-color:{bg};color:{fg};font-weight:600;font-size:10px;border-top:2px solid #888"
+                else:
+                    zero_style = "color:#aaa;" if val == "0" else f"color:{fg};font-weight:600;"
+                    styles[j] = f"background-color:{bg};{zero_style}font-size:10px;border-top:2px solid #888" if j == 1 else f"background-color:{bg};{zero_style}font-size:10px"
+            return styles
+        styled_final_df = (
+            _view_with_counts.style
+            .map(color_shifts, subset=pd.IndexSlice[:len(_view_df)-1, _day_cols])
+            .apply(_color_count_row, axis=1, subset=pd.IndexSlice[len(_view_df):, :])
+        )
 
         stats = []
         for idx, row in ai_df.iterrows():
@@ -4794,6 +4836,16 @@ if st.session_state.step >= 6:
                 st.session_state.final_sched = _save_final
             else:
                 st.dataframe(styled_final_df, use_container_width=True)
+            # ── 欠班警示（排在全彩班表預覽下方）────────────────────────
+            _s6d = st.session_state.get("s6_deficits", [])
+            if _s6d:
+                st.error(
+                    f"⚠️ **欠班警示（{len(_s6d)} 人）**：以下人員在遵守勞基法及每日人力配額上限的前提下，"
+                    f"清尾補班後仍無法達到應上班天數，請至手動編輯模式補排，或調整配額設定後重新計算："
+                )
+                st.dataframe(pd.DataFrame(_s6d), use_container_width=True, hide_index=True)
+            else:
+                st.success("✅ 全體人員均已達到應上班天數，無欠班！")
         with tab2:
             st.dataframe(stats_df, use_container_width=True)
         with tab3:
