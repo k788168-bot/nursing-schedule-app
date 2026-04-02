@@ -92,6 +92,67 @@ def abbrev_display(val):
         return v[0]
     return val
 
+def build_schedule_with_counts(disp_df, src_df, day_cols, ai_df_local):
+    """
+    在顯示用班表下方附加 D/E/N/12-8 每日人數統計列，
+    回傳已套色的 Styler 物件，可直接傳入 st.dataframe()。
+    disp_df : 已套 abbrev_display / apply_prewhite_dx 的顯示副本
+    src_df  : 原始班表（用於計算人數，未經顯示轉換）
+    day_cols: 日期欄位名稱清單，如 ["1","2",..."31"]
+    ai_df_local: 護理師參數 DataFrame
+    """
+    _count_rows = []
+    for _lbl, _key in [("D班人數", "D"), ("E班人數", "E"), ("N班人數", "N"), ("12-8人數", "12-8")]:
+        _row = {"姓名": _lbl}
+        for _dc in day_cols:
+            try:
+                if _key == "D":
+                    _cnt = sum(
+                        1 for i in ai_df_local.index
+                        if isinstance(src_df.at[i, _dc], str)
+                        and src_df.at[i, _dc].upper().startswith("D")
+                        and str(ai_df_local.at[i, "職稱"]).strip() not in NO_HOL_ADMIN
+                    )
+                else:
+                    _cnt = sum(1 for i in ai_df_local.index if str(src_df.at[i, _dc]).strip() == _key)
+            except Exception:
+                _cnt = 0
+            _row[_dc] = str(_cnt) if _cnt > 0 else "0"
+        _count_rows.append(_row)
+
+    _combined = pd.concat([disp_df, pd.DataFrame(_count_rows)], ignore_index=True)
+    _n_data = len(disp_df)
+
+    _color_map = {
+        "D班人數": ("#dbeafe", "#1e40af"),
+        "E班人數": ("#fef9c3", "#92400e"),
+        "N班人數": ("#f3e8ff", "#6b21a8"),
+        "12-8人數": ("#d1fae5", "#065f46"),
+    }
+
+    def _style_count_rows(row):
+        styles = [""] * len(row)
+        lbl = str(row.iloc[0])
+        if lbl not in _color_map:
+            return styles
+        bg, fg = _color_map[lbl]
+        for j in range(len(styles)):
+            col_name = row.index[j]
+            val = str(row.iloc[j])
+            border = "border-top:2px solid #999;" if j == 0 else "border-top:2px solid #ccc;"
+            zero = "color:#bbb;" if val == "0" else f"color:{fg};font-weight:600;"
+            name_style = f"background-color:{bg};color:{fg};font-weight:700;font-size:10px;{border}"
+            data_style = f"background-color:{bg};{zero}font-size:11px;{border}"
+            styles[j] = name_style if col_name == "姓名" else data_style
+        return styles
+
+    return (
+        _combined.style
+        .map(color_shifts, subset=pd.IndexSlice[:_n_data - 1, day_cols])
+        .apply(_style_count_rows, axis=1, subset=pd.IndexSlice[_n_data:, :])
+    )
+
+
 def apply_prewhite_dx(disp_df, ai_df_local, month_days_local):
     """
     將顯示用 DataFrame 中，預白日期對應的 D 格標為 Dx。
@@ -1313,7 +1374,7 @@ if st.session_state.step >= 2:
                     for _c in _day_cols_b:
                         _preview_df[_c] = _preview_df[_c].apply(abbrev_display)
                     st.dataframe(
-                        _preview_df.style.map(color_shifts, subset=_day_cols_b),
+                        build_schedule_with_counts(_preview_df, st.session_state.base_sched, _day_cols_b, st.session_state.ai_df),
                         use_container_width=True
                     )
 
@@ -1980,7 +2041,7 @@ if st.session_state.step >= 3:
                 # 預白班：D 格標為 Dx
                 _disp_pack = apply_prewhite_dx(_disp_pack, st.session_state.ai_df, month_days)
                 st.dataframe(
-                    _disp_pack.style.map(color_shifts, subset=_day_cols_p),
+                    build_schedule_with_counts(_disp_pack, st.session_state.pack_sched, _day_cols_p, st.session_state.ai_df),
                     use_container_width=True
                 )
 
@@ -2849,7 +2910,7 @@ if st.session_state.step >= 4:
                 # 預白班：D 格標為 Dx
                 _disp_night = apply_prewhite_dx(_disp_night, st.session_state.ai_df, month_days)
                 st.dataframe(
-                    _disp_night.style.map(color_shifts, subset=_day_cols_n),
+                    build_schedule_with_counts(_disp_night, st.session_state.night_sched, _day_cols_n, st.session_state.ai_df),
                     use_container_width=True
                 )
 
@@ -4018,7 +4079,7 @@ if st.session_state.step >= 5:
                 # 預白班：D 格標為 Dx
                 _disp_d = apply_prewhite_dx(_disp_d, ai_df, month_days)
                 st.dataframe(
-                    _disp_d.style.map(color_shifts, subset=_day_cols_d),
+                    build_schedule_with_counts(_disp_d, st.session_state.d_sched, _day_cols_d, ai_df),
                     use_container_width=True
                 )
 
@@ -4709,52 +4770,7 @@ if st.session_state.step >= 6:
             _view_df[_c] = _view_df[_c].apply(abbrev_display)
         # 預白班：D 格標為 Dx（視覺區分預排白班）
         _view_df = apply_prewhite_dx(_view_df, ai_df, month_days)
-        # ── 在班表最後附加每日各班別人數統計列 ──────────────────────────────
-        _sched_src = st.session_state.final_sched  # 用原始班表計算（未經顯示轉換）
-        _count_rows = []
-        for _shift_label, _shift_key in [("D班人數", "D"), ("E班人數", "E"), ("N班人數", "N"), ("12-8人數", "12-8")]:
-            _row = {"姓名": _shift_label}
-            for _dc in _day_cols:
-                if _shift_key == "D":
-                    _cnt = sum(
-                        1 for i in ai_df.index
-                        if isinstance(_sched_src.at[i, _dc], str)
-                        and _sched_src.at[i, _dc].upper().startswith("D")
-                        and str(ai_df.at[i, "職稱"]).strip() not in NO_HOL_ADMIN
-                    )
-                else:
-                    _cnt = sum(1 for i in ai_df.index if str(_sched_src.at[i, _dc]).strip() == _shift_key)
-                _row[_dc] = str(_cnt) if _cnt > 0 else "0"
-            _count_rows.append(_row)
-        _count_df = pd.DataFrame(_count_rows)
-        _view_with_counts = pd.concat([_view_df, _count_df], ignore_index=True)
-        def _color_count_row(row):
-            styles = [""] * len(row)
-            lbl = str(row.iloc[0])
-            if "D班" in lbl:
-                bg = "#dbeafe"; fg = "#1e40af"
-            elif "E班" in lbl:
-                bg = "#fef9c3"; fg = "#92400e"
-            elif "N班" in lbl:
-                bg = "#f3e8ff"; fg = "#6b21a8"
-            elif "12-8" in lbl:
-                bg = "#d1fae5"; fg = "#065f46"
-            else:
-                return styles
-            for j in range(len(styles)):
-                col_name = row.index[j]
-                val = str(row.iloc[j])
-                if col_name == "姓名":
-                    styles[j] = f"background-color:{bg};color:{fg};font-weight:600;font-size:10px;border-top:2px solid #888"
-                else:
-                    zero_style = "color:#aaa;" if val == "0" else f"color:{fg};font-weight:600;"
-                    styles[j] = f"background-color:{bg};{zero_style}font-size:10px;border-top:2px solid #888" if j == 1 else f"background-color:{bg};{zero_style}font-size:10px"
-            return styles
-        styled_final_df = (
-            _view_with_counts.style
-            .map(color_shifts, subset=pd.IndexSlice[:len(_view_df)-1, _day_cols])
-            .apply(_color_count_row, axis=1, subset=pd.IndexSlice[len(_view_df):, :])
-        )
+        styled_final_df = build_schedule_with_counts(_view_df, st.session_state.final_sched, _day_cols, ai_df)
 
         stats = []
         for idx, row in ai_df.iterrows():
