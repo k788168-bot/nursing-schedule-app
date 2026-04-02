@@ -40,6 +40,7 @@ _CHECKPOINT_KEYS = [
     "twelve_sched", "final_sched", "classified_sched",
     "pack_warnings", "target_warnings", "shortages_export",
     "explanation_df", "s6_deficits",
+    "extra_staffing_df",
 ]
 
 def _make_checkpoint() -> bytes:
@@ -1428,6 +1429,38 @@ if st.session_state.step >= 2:
                 else:
                     st.dataframe(st.session_state.targets_df_ss, hide_index=True, use_container_width=True)
 
+            # ── 偏好加班人數設定 ──────────────────────────────────────────────
+            st.write("### 📈 人力充足時的偏好加班設定（選填）")
+            st.caption("設定每週特定星期與班別，在人力充足時系統會嘗試多補幾人上班。不影響基本配額，僅在已達最低配額後才生效。")
+
+            _wday_labels = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+            _shift_labels = ["D班", "E班", "N班", "12-8"]
+
+            # 初始化預設值（全部為0）
+            if st.session_state.get("extra_staffing_df") is None:
+                _extra_default = []
+                for _wl in _wday_labels:
+                    _row = {"星期": _wl}
+                    for _sl in _shift_labels:
+                        _row[_sl] = 0
+                    _extra_default.append(_row)
+                st.session_state.extra_staffing_df = pd.DataFrame(_extra_default)
+
+            _extra_edited = st.data_editor(
+                st.session_state.extra_staffing_df,
+                hide_index=True,
+                use_container_width=False,
+                column_config={
+                    "星期": st.column_config.TextColumn("星期", disabled=True, width="small"),
+                    "D班":  st.column_config.NumberColumn("D班 希望多加人數", min_value=0, max_value=4, step=1, width="small"),
+                    "E班":  st.column_config.NumberColumn("E班 希望多加人數", min_value=0, max_value=4, step=1, width="small"),
+                    "N班":  st.column_config.NumberColumn("N班 希望多加人數", min_value=0, max_value=4, step=1, width="small"),
+                    "12-8": st.column_config.NumberColumn("12-8 希望多加人數", min_value=0, max_value=4, step=1, width="small"),
+                },
+                key="extra_staffing_editor"
+            )
+            st.session_state.extra_staffing_df = _extra_edited
+
             col_btn1, col_btn2 = st.columns([1, 4])
             with col_btn1:
                 if st.button("⬅️ 回到第一步", type="secondary"):
@@ -1440,7 +1473,7 @@ if st.session_state.step >= 2:
                     st.session_state.skill_cols = temp_skills
                     st.session_state.edited_weekly_df = edited_weekly_df
                     st.session_state.edited_quota_df = edited_quota_df
-                    # custom_targets 已由編輯模式即時同步，直接進下一步
+                    st.session_state.extra_staffing_df = _extra_edited
                     st.session_state.step = 3
                     st.rerun()
     else:
@@ -3592,6 +3625,70 @@ if st.session_state.step >= 5:
                     # ★ week_variety_ok 此處刻意略過（Final Pass 的唯一放寬）
                     if _eff_fp in ("12-8", "E") and not group_cap_ok(n_idx, _eff_fp, d_int, sched, cache_group5): continue
                     sched[n_idx][d_int] = _eff_fp
+
+            # ── 偏好加班 Pass：人力充足時，依設定多補指定班別人數 ──────────────────────────
+            # 僅在已達最低配額後才執行，對每日每班別嘗試多補「extra_staffing_df」設定的人數
+            # 保留所有勞基法限制，不強制，找不到合法人員就跳過
+            _extra_df = st.session_state.get("extra_staffing_df")
+            _wday_names_ep = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+            _shift_col_map_ep = {"D班": "D", "E班": "E", "N班": "N", "12-8": "12-8"}
+
+            if _extra_df is not None:
+                _hol_set_ep = set(sat_list5) | set(sun_list5) | set(nat_list5)
+                for d_int in range(1, month_days + 1):
+                    _fw_ep = (st.session_state.first_wday + d_int - 1) % 7
+                    _wday_label_ep = _wday_names_ep[_fw_ep]
+                    _extra_row = _extra_df[_extra_df["星期"] == _wday_label_ep]
+                    if _extra_row.empty: continue
+
+                    for _scol_ep, _stype_ep in _shift_col_map_ep.items():
+                        try:
+                            _extra_cnt_ep = int(_extra_row.iloc[0][_scol_ep])
+                        except (KeyError, ValueError):
+                            continue
+                        if _extra_cnt_ep <= 0: continue
+
+                        # 計算當日已有多少人排此班別
+                        _curr_ep = sum(
+                            1 for i in ai_df.index
+                            if (sched[i][d_int] == _stype_ep if _stype_ep != "D"
+                                else (isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D")
+                                      and cache_title[i] not in NO_HOL_ADMIN))
+                        )
+                        # 取得當日基本配額
+                        _rq_ep = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                        if _rq_ep.empty: continue
+                        try:
+                            _base_quota_ep = int(_rq_ep.iloc[0][_scol_ep])
+                        except (KeyError, ValueError):
+                            continue
+
+                        # 已達基本配額才開始補偏好加班
+                        if _curr_ep < _base_quota_ep: continue
+                        _target_ep = _base_quota_ep + _extra_cnt_ep
+                        if _curr_ep >= _target_ep: continue
+
+                        # 找可合法排此班別的人員（已達個人目標天數的人不強制加班）
+                        _need_ep = min(_target_ep - _curr_ep, 4)  # 單日單班最多補 4 人
+                        _cands_ep = []
+                        for i in ai_df.index:
+                            if sched[i][d_int] not in ["", "上課"]: continue
+                            if cache_title[i] in ADMIN_TITLES and _stype_ep != "D": continue
+                            if cache_title[i] in NO_HOL_SET and d_int in _hol_set_ep: continue
+                            if sum(1 for x in sched[i] if is_work(x)) >= personal_targets.get(i, 0): continue
+                            if not can_work_base(i, _stype_ep, d_int, strict_wow=False, week_variety_override=True): continue
+                            if _stype_ep in ("E", "12-8") and not group_cap_ok(i, _stype_ep, d_int, sched, cache_group5): continue
+                            _cands_ep.append(i)
+
+                        # 排序：偏好已有連班的人（避免製造孤立班）
+                        _cands_ep.sort(key=lambda i: (
+                            0 if (is_work(sched[i][d_int-1] if d_int>1 else "") or
+                                  is_work(sched[i][d_int+1] if d_int<month_days else "")) else 1,
+                            sum(1 for v in sched[i] if is_work(v))
+                        ))
+
+                        for i in _cands_ep[:_need_ep]:
+                            sched[i][d_int] = _stype_ep
 
             # ── 傷兵/助理 最終兜底：強制填滿所有平日空格（不套用任何勞基法限制）──────────────
             # 傷兵/助理：沒有預假，平日全上白班，不計入單位人力配額
