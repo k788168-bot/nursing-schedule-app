@@ -120,8 +120,8 @@ def build_schedule_with_counts(disp_df, src_df, day_cols, ai_df_local):
             _row[_dc] = str(_cnt) if _cnt > 0 else "0"
         _count_rows.append(_row)
 
+    _count_labels = {"D班人數", "E班人數", "N班人數", "12-8人數"}
     _combined = pd.concat([disp_df, pd.DataFrame(_count_rows)], ignore_index=True)
-    _n_data = len(disp_df)
 
     _color_map = {
         "D班人數": ("#dbeafe", "#1e40af"),
@@ -130,27 +130,32 @@ def build_schedule_with_counts(disp_df, src_df, day_cols, ai_df_local):
         "12-8人數": ("#d1fae5", "#065f46"),
     }
 
-    def _style_count_rows(row):
-        styles = [""] * len(row)
+    def _style_row(row):
+        """套用全列：護理師列只套班別色；統計列套彩色底色。"""
         lbl = str(row.iloc[0])
         if lbl not in _color_map:
+            # 護理師資料列：日期欄套班別色，其餘不動
+            styles = []
+            for col_name in row.index:
+                if col_name in day_cols:
+                    styles.append(color_shifts(row[col_name]))
+                else:
+                    styles.append("")
             return styles
+        # 統計列：整列套彩色底色
         bg, fg = _color_map[lbl]
-        for j in range(len(styles)):
-            col_name = row.index[j]
+        styles = []
+        for j, col_name in enumerate(row.index):
             val = str(row.iloc[j])
             border = "border-top:2px solid #999;" if j == 0 else "border-top:2px solid #ccc;"
             zero = "color:#bbb;" if val == "0" else f"color:{fg};font-weight:600;"
-            name_style = f"background-color:{bg};color:{fg};font-weight:700;font-size:10px;{border}"
-            data_style = f"background-color:{bg};{zero}font-size:11px;{border}"
-            styles[j] = name_style if col_name == "姓名" else data_style
+            if col_name == "姓名":
+                styles.append(f"background-color:{bg};color:{fg};font-weight:700;font-size:10px;{border}")
+            else:
+                styles.append(f"background-color:{bg};{zero}font-size:11px;{border}")
         return styles
 
-    return (
-        _combined.style
-        .map(color_shifts, subset=pd.IndexSlice[:_n_data - 1, day_cols])
-        .apply(_style_count_rows, axis=1, subset=pd.IndexSlice[_n_data:, :])
-    )
+    return _combined.style.apply(_style_row, axis=1)
 
 
 def apply_prewhite_dx(disp_df, ai_df_local, month_days_local):
