@@ -2170,17 +2170,21 @@ if st.session_state.step >= 3:
                                         i
                                     )
                                 )
-                                _day_placed2 = 0
-                                _day_limit2 = max(1, len(group) // 2)  # 每假日最多排半數，均衡假日分配
                                 for idx in group_sorted:
-                                    if _day_placed2 >= _day_limit2: break  # 本假日已達上限
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
                                     # 公平分配上限：Stage 2 同樣最多到 PACK_MIN_SHIFTS（15班）
                                     if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
+                                    # ── 假日包班班次個人上限：避免假日出勤集中在少數人 ──
+                                    # 上限 = ceil(max_target × 假日比例)，最多不超過半數假日
+                                    _hol_set3 = set(sat_list3) | set(sun_list3) | set(nat_list3)
+                                    _hol_ratio3 = len(_hol_set3) / max(month_days, 1)
+                                    _hol_cap3 = max(2, round(max_target3[idx] * _hol_ratio3))
+                                    _hol_worked3 = sum(1 for hd in _hol_set3 if sched[idx][hd] == pref_s)
+                                    if _hol_worked3 >= _hol_cap3: continue  # 已達假日上限，跳過
                                     if en_quota_full3(pref_s, d_int): break  # 此假日 E/N 額已滿
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
-                                        _day_placed2 += 1
+                                        break  # 每班別在此假日只優先排一人（下次輪到下一位）
 
                         # ── 第三階段：均等補足至應上班天數 ──
                         # 改用「日為外迴圈、人為內迴圈」，與第一、二階段相同結構
