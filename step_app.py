@@ -1335,12 +1335,29 @@ if _prev_locked:
     st.success(f"🔒 前月班表已鎖定（{len(st.session_state.prev_month_buffer)} 人）｜如需重新上傳請重新整理頁面")
 elif _prev_file is not None:
     try:
-        _prev_xl = pd.read_excel(_prev_file, sheet_name=0, header=0)
-        _pnc = [c for c in _prev_xl.columns if "姓名" in str(c)]
+        # 自動偵測標題行：往前5行搜尋含「姓名」的那一行
+        _prev_raw = pd.read_excel(_prev_file, sheet_name=0, header=None)
+        _header_row = None
+        for _ri in range(min(5, len(_prev_raw))):
+            if any("姓名" in str(v) for v in _prev_raw.iloc[_ri].tolist()):
+                _header_row = _ri
+                break
+        if _header_row is None:
+            st.error("找不到「姓名」欄，請確認前月班表格式（標題行需包含『姓名』）")
+            st.stop()
+        _prev_xl = pd.read_excel(_prev_file, sheet_name=0, header=_header_row)
+        # 統一欄位名稱為字串，找姓名欄
+        _prev_xl.columns = [str(c).strip() for c in _prev_xl.columns]
+        _pnc = [c for c in _prev_xl.columns if "姓名" in c]
         if _pnc:
             _prev_xl = _prev_xl.rename(columns={_pnc[0]: "姓名"})
             _prev_xl["姓名"] = _prev_xl["姓名"].astype(str).str.strip()
-            _prev_day_cols = sorted([c for c in _prev_xl.columns if str(c).isdigit()], key=lambda x: int(x))
+            # 自動偵測前月天數：欄位名稱為純數字，且取最大者推算月份天數
+            # 注意：此班表格式可能同時包含上月尾巴和本月日期，只取 1~31 範圍的純數字
+            _prev_day_cols = sorted(
+                [c for c in _prev_xl.columns if str(c).isdigit() and 1 <= int(c) <= 31],
+                key=lambda x: int(x)
+            )
             _prev_md = max(int(c) for c in _prev_day_cols) if _prev_day_cols else 0
             if _prev_md >= 13:
                 _buf_cols = [str(d) for d in range(_prev_md - 12, _prev_md + 1)]
