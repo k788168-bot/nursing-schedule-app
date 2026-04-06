@@ -4309,11 +4309,21 @@ if st.session_state.step >= 5:
                                     if _mv_s not in ("D", "E", "N", "12-8"): continue
                                     # 假日能合法排此班別（連班/休息間隔等）
                                     if not _legal_place_shift(_un_h, _hd, _mv_s): continue
+                                    _s3_qcol = {"D": "D班", "E": "E班", "N": "N班", "12-8": "12-8"}.get(_mv_s, "D班")
+                                    # ★ 確認假日目的地未超出配額上限（避免集中填入同一假日）
+                                    _hd_qrow = edited_quota_df[edited_quota_df["日期"] == str(_hd)]
+                                    if not _hd_qrow.empty:
+                                        _hd_quota = int(_hd_qrow.iloc[0].get(_s3_qcol, 0))
+                                        _hd_curr = sum(
+                                            1 for _qi in ai_df.index
+                                            if (str(sched[_qi][_hd]).strip().startswith("D") if _mv_s == "D"
+                                                else str(sched[_qi][_hd]).strip() == _mv_s)
+                                        )
+                                        if _hd_curr >= _hd_quota: continue  # 假日已達配額，換下一個假日
                                     # ★ 確認讓出平日班後，該平日仍符合配額下限
-                                    _wd_qcol = {"D": "D班", "E": "E班", "N": "N班", "12-8": "12-8"}.get(_mv_s, "D班")
                                     _wd_qrow = edited_quota_df[edited_quota_df["日期"] == str(_wd)]
                                     if not _wd_qrow.empty:
-                                        _wd_quota_min = int(_wd_qrow.iloc[0].get(_wd_qcol, 0))
+                                        _wd_quota_min = int(_wd_qrow.iloc[0].get(_s3_qcol, 0))
                                         _wd_curr = sum(
                                             1 for _qi in ai_df.index
                                             if (str(sched[_qi][_wd]).strip().startswith("D") if _mv_s == "D"
