@@ -627,10 +627,34 @@ def build_colored_excel(final_sched_df, stats_df, explanation_df, shortages_expo
             lambda v: "休" if str(v).strip() in _REST_VALS else abbrev_display(v)
         )
 
-    # === 工作表 1：全彩排班表 ===
+    # === 工作表 1：全彩排班表（含每日人數統計列）===
     ws1 = wb.active
     ws1.title = "🗓️ 全彩排班表"
-    write_df_to_sheet(ws1, display_df, day_cols=day_cols, freeze_col=1)
+
+    _count_rows_xl = []
+    for _lbl_xl, _key_xl in [("D班人數", "D"), ("E班人數", "E"), ("N班人數", "N"), ("12-8人數", "12-8")]:
+        _row_xl = {"姓名": _lbl_xl}
+        for _dc_xl in day_cols:
+            try:
+                if _key_xl == "D":
+                    _cnt_xl = sum(
+                        1 for _ri in range(len(final_sched_df))
+                        if isinstance(final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)], str)
+                        and final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)].upper().startswith("D")
+                        and final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)].upper() != "DX"
+                    )
+                else:
+                    _cnt_xl = sum(
+                        1 for _ri in range(len(final_sched_df))
+                        if str(final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)]).strip() == _key_xl
+                    )
+            except Exception:
+                _cnt_xl = 0
+            _row_xl[_dc_xl] = str(_cnt_xl) if _cnt_xl > 0 else "0"
+        _count_rows_xl.append(_row_xl)
+
+    _display_with_counts = pd.concat([display_df, pd.DataFrame(_count_rows_xl)], ignore_index=True)
+    write_df_to_sheet(ws1, _display_with_counts, day_cols=day_cols, freeze_col=1)
 
     # 加入圖例說明列
     legend_row = ws1.max_row + 2
@@ -2149,6 +2173,19 @@ if st.session_state.step >= 3:
                                     # 公平分配上限：Stage 1 最多排到 PACK_MIN_SHIFTS（15班下限）
                                     # 超過後暫停，由 Stage 3 日外迴圈均等補足至 max_target
                                     if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
+                                    # ── 假日E班硬性上限：E包班護師每月假日出勤 ≤ 上限 ──────────────
+                                    # 上限 = ceil(假日E配額總量 / E包班人數)，避免集中在少數人
+                                    if d_int in holiday_days_set3:
+                                        _hol_set1 = holiday_days_set3
+                                        _e_pack_cnt1 = sum(1 for j in pack_indices3 if get_pref_s(cache_pref[j]) == pref_s)
+                                        _hol_e_demand1 = sum(
+                                            int(edited_quota_df[edited_quota_df["日期"]==str(hd)].iloc[0].get(f"{pref_s}班", 0))
+                                            for hd in _hol_set1
+                                            if not edited_quota_df[edited_quota_df["日期"]==str(hd)].empty
+                                        )
+                                        _hol_e_cap1 = max(2, -(-_hol_e_demand1 // max(_e_pack_cnt1, 1)))  # ceil除法
+                                        _hol_e_worked1 = sum(1 for hd in _hol_set1 if sched[idx][hd] == pref_s)
+                                        if _hol_e_worked1 >= _hol_e_cap1: continue
                                     if en_quota_full3(pref_s, d_int): break  # 當日額滿，跳下一班別
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
@@ -2196,11 +2233,24 @@ if st.session_state.step >= 3:
                                     sum(1 for v in sched[i] if is_work(v)),                               # 次排：總出勤
                                     sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 再排：達標比例
                                 ))
+                                # 假日：每次只讓假日出勤最少的1人取得（嚴格輪替，防止壟斷）
+                                # 平日：最多排入 len-1 人（減少碎片化）
+                                _day_limit3 = 1 if _is_hol_d3 else max(1, len(group3) - 1)
                                 _day_placed3 = 0   # 本日已排入人數
-                                _day_limit3 = max(1, len(group3) - 1)  # 每日最多排入 len-1 人（減少碎片化）
                                 for idx in group3_sorted:
                                     if _day_placed3 >= _day_limit3: break  # 本日已達上限，讓位給其他人
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
+                                    # ── 假日E班硬性上限（Stage 3 同樣套用）──────────────────────
+                                    if d_int in _hol_set_s3:
+                                        _e_pack_cnt3 = sum(1 for j in pack_indices3 if get_pref_s(cache_pref[j]) == pref_s)
+                                        _hol_e_demand3 = sum(
+                                            int(edited_quota_df[edited_quota_df["日期"]==str(hd)].iloc[0].get(f"{pref_s}班", 0))
+                                            for hd in _hol_set_s3
+                                            if not edited_quota_df[edited_quota_df["日期"]==str(hd)].empty
+                                        )
+                                        _hol_e_cap3 = max(2, -(-_hol_e_demand3 // max(_e_pack_cnt3, 1)))
+                                        _hol_e_worked3 = sum(1 for hd in _hol_set_s3 if sched[idx][hd] == pref_s)
+                                        if _hol_e_worked3 >= _hol_e_cap3: continue
                                     if en_quota_full3(pref_s, d_int): break
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
