@@ -169,6 +169,20 @@ def build_schedule_with_counts(disp_df, src_df, day_cols, ai_df_local):
     return _combined.style.apply(_style_row, axis=1)
 
 
+def _xmonth_shift(n_idx, d, sched_dict, ai_df_local, month_days_local):
+    """
+    跨月班別查詢：d >= 1 查本月；d < 1 查前月緩衝（prev_month_buffer）。
+    用於 14 日窗口計算，讓排班時即時考慮前月尾段的出勤情況。
+    """
+    if d >= 1:
+        return sched_dict[n_idx][d] if 1 <= d <= month_days_local else ""
+    try:
+        _nm = str(ai_df_local.at[n_idx, "姓名"]).strip()
+    except Exception:
+        return ""
+    return (st.session_state.get("prev_month_buffer") or {}).get(_nm, {}).get(d, "")
+
+
 def apply_prewhite_dx(disp_df, ai_df_local, month_days_local):
     """
     將顯示用 DataFrame 中，預白日期對應的 D 格標為 Dx。
@@ -2015,16 +2029,15 @@ if st.session_state.step >= 3:
                                 else: break
                             if s_consec > 5: return False
 
-                            w_min = max(1, d_int - 13)
+                            _has_pb3 = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                            w_min = (d_int - 13) if _has_pb3 else max(1, d_int - 13)
                             w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
                             for start_d in range(w_min, w_max + 1):
                                 end_d = min(month_days, start_d + 13)
-                                # 從0開始計算窗口內已排班天數（不含d_int本身）
-                                # 排入d_int後總計 = worked_in_window + 1，不得超過12
                                 worked_in_window = 0
                                 for curr_d in range(start_d, end_d + 1):
                                     if curr_d == d_int: continue
-                                    if is_work(sched[n_idx][curr_d]): worked_in_window += 1
+                                    if is_work(_xmonth_shift(n_idx, curr_d, sched, ai_df, month_days)): worked_in_window += 1
                                 if worked_in_window + 1 > 12: return False
                             if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                             return True
@@ -2662,14 +2675,15 @@ if st.session_state.step >= 4:
                             else: break
                         if s_consec > 5: return False
 
-                        w_min = max(1, d_int - 13)
+                        _has_pb4 = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                        w_min = (d_int - 13) if _has_pb4 else max(1, d_int - 13)
                         w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
                         for start_d in range(w_min, w_max + 1):
                             end_d = min(month_days, start_d + 13)
                             worked_in_window = 0
                             for curr_d in range(start_d, end_d + 1):
                                 if curr_d == d_int: continue
-                                if is_work(sched[n_idx][curr_d]): worked_in_window += 1
+                                if is_work(_xmonth_shift(n_idx, curr_d, sched, ai_df, month_days)): worked_in_window += 1
                             if worked_in_window + 1 > 12: return False
                         if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                         return True
@@ -2954,14 +2968,15 @@ if st.session_state.step >= 4:
                             if is_work(sched[n_idx][fd]): s_c += 1
                             else: break
                         if s_c > 5: return False
-                        w_min = max(1, d_int - 13)
+                        _has_pb4b = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                        w_min = (d_int - 13) if _has_pb4b else max(1, d_int - 13)
                         w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
                         for start_d in range(w_min, w_max + 1):
                             end_d = min(month_days, start_d + 13)
                             worked_win = 1
                             for cd in range(start_d, end_d + 1):
                                 if cd == d_int: continue
-                                if is_work(sched[n_idx][cd]): worked_win += 1
+                                if is_work(_xmonth_shift(n_idx, cd, sched, ai_df, month_days)): worked_win += 1
                             if worked_win > 12: return False
                         if not week_variety_ok(sched, n_idx, "12-8", d_int, st.session_state.first_wday, month_days): return False
                         return True
@@ -3480,15 +3495,16 @@ if st.session_state.step >= 5:
                     else: break
                 if s_consec > 5: return False
 
-                w_min = max(1, d_int - 13)
-                w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
-                for start_d in range(w_min, w_max + 1):
-                    end_d = min(month_days, start_d + 13)
-                    worked_in_window = 0
-                    for curr_d in range(start_d, end_d + 1):
-                        if curr_d == d_int: continue
-                        if is_work(sched[n_idx][curr_d]): worked_in_window += 1
-                    if worked_in_window + 1 > 12: return False
+                _has_pb5 = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                _w_min = (d_int - 13) if _has_pb5 else max(1, d_int - 13)
+                _w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
+                for _sd in range(_w_min, _w_max + 1):
+                    _ed = min(month_days, _sd + 13)
+                    _ww = 1
+                    for _cd in range(_sd, _ed + 1):
+                        if _cd == d_int: continue
+                        if is_work(_xmonth_shift(n_idx, _cd, sched, ai_df, month_days)): _ww += 1
+                    if _ww > 12: return False
                 if not week_variety_override and not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                 return True
 
@@ -3810,15 +3826,16 @@ if st.session_state.step >= 5:
                     if is_work(sched[n_idx][_fd]): s_c5 += 1
                     else: break
                 if s_c5 > 5: return False
-                # 14 日 12 班窗口（勞基法）
-                _w_min = max(1, d_int - 13)
+                # 14 日 12 班窗口（含前月緩衝）
+                _has_pbf = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                _w_min = (d_int - 13) if _has_pbf else max(1, d_int - 13)
                 _w_max = min(d_int, month_days - 13) if month_days >= 14 else 1
                 for _sd in range(_w_min, _w_max + 1):
                     _ed = min(month_days, _sd + 13)
                     _ww = 1
                     for _cd in range(_sd, _ed + 1):
                         if _cd == d_int: continue
-                        if is_work(sched[n_idx][_cd]): _ww += 1
+                        if is_work(_xmonth_shift(n_idx, _cd, sched, ai_df, month_days)): _ww += 1
                     if _ww > 12: return False
                 if not week_variety_override and not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
                 return True
@@ -3966,14 +3983,15 @@ if st.session_state.step >= 5:
                             if is_work(sched[n_idx][_fd3]): _sc3 += 1
                             else: break
                         if _sc3 > 5: continue
-                        # 14 日窗口
+                        # 14 日窗口（含前月緩衝）
                         _14ok3 = True
-                        _wm3 = max(1, d_int - 13)
+                        _has_pb3p = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                        _wm3 = (d_int - 13) if _has_pb3p else max(1, d_int - 13)
                         _wx3 = min(d_int, month_days - 13) if month_days >= 14 else 1
                         for _sd3 in range(_wm3, _wx3 + 1):
                             _ed3 = min(month_days, _sd3 + 13)
                             _ww3 = sum(1 for _cd3 in range(_sd3, _ed3 + 1)
-                                       if _cd3 != d_int and is_work(sched[n_idx][_cd3]))
+                                       if _cd3 != d_int and is_work(_xmonth_shift(n_idx, _cd3, sched, ai_df, month_days)))
                             if _ww3 + 1 > 12: _14ok3 = False; break
                         if not _14ok3: continue
                         if _s3 in ("12-8", "E") and not group_cap_ok(n_idx, _s3, d_int, sched, cache_group5): continue
@@ -4044,13 +4062,14 @@ if st.session_state.step >= 5:
                         if is_work(sched[n_idx][_fd_fp]): _sc_fp += 1
                         else: break
                     if _sc_fp > 5: continue
-                    # 14日12班窗口（勞基法）
+                    # 14日12班窗口（含前月緩衝）
                     _14ok_fp = True
-                    _wm_fp = max(1, d_int - 13)
+                    _has_pbfp = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                    _wm_fp = (d_int - 13) if _has_pbfp else max(1, d_int - 13)
                     _wx_fp = min(d_int, month_days - 13) if month_days >= 14 else 1
                     for _sd_fp in range(_wm_fp, _wx_fp + 1):
                         _ed_fp = min(month_days, _sd_fp + 13)
-                        _ww_fp = sum(1 for _cd in range(_sd_fp, _ed_fp + 1) if _cd != d_int and is_work(sched[n_idx][_cd]))
+                        _ww_fp = sum(1 for _cd in range(_sd_fp, _ed_fp + 1) if _cd != d_int and is_work(_xmonth_shift(n_idx, _cd, sched, ai_df, month_days)))
                         if _ww_fp + 1 > 12: _14ok_fp = False; break
                     if not _14ok_fp: continue
                     # ★ week_variety_ok 此處刻意略過（Final Pass 的唯一放寬）
@@ -4890,14 +4909,15 @@ if st.session_state.step >= 6:
                         if is_work(sched[n_idx][_fd6f]): _sc6f += 1
                         else: break
                     if _sc6f > 5: _law_block += 1; continue
-                    # 14日窗口
+                    # 14日窗口（含前月緩衝）
                     _14ok6f = True
-                    _w6f_min = max(1, _d6f - 13)
+                    _has_pb6f = bool((st.session_state.get("prev_month_buffer") or {}).get(str(ai_df.at[n_idx,"姓名"]).strip() if n_idx in ai_df.index else "", {}))
+                    _w6f_min = (_d6f - 13) if _has_pb6f else max(1, _d6f - 13)
                     _w6f_max = min(_d6f, month_days - 13) if month_days >= 14 else 1
                     for _sd6f in range(_w6f_min, _w6f_max + 1):
                         _ed6f = min(month_days, _sd6f + 13)
                         _ww6f = sum(1 for _cd6f in range(_sd6f, _ed6f + 1)
-                                    if _cd6f != _d6f and is_work(sched[n_idx][_cd6f]))
+                                    if _cd6f != _d6f and is_work(_xmonth_shift(n_idx, _cd6f, sched, ai_df, month_days)))
                         if _ww6f + 1 > 12: _14ok6f = False; break
                     if not _14ok6f: _law_block += 1; continue
                     # 配額
