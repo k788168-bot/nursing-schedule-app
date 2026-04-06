@@ -4238,6 +4238,37 @@ if st.session_state.step >= 5:
                                     _swapped_h = True
                                     break
 
+                    # ── 策略二：單格轉讓（四格互換無解時備用）────────────────────
+                    # over 讓出假日班（出勤-1），under 在同一假日接班（出勤+1）
+                    # 條件：over讓出後仍達 personal_targets；under接班後不超標；under有假日出勤資格
+                    if not _swapped_h:
+                        for _ov_h in _over_lh:
+                            if _swapped_h: break
+                            for _un_h in _under_lh:
+                                if _swapped_h: break
+                                for _hd in sorted(_hol_day_set):
+                                    if _swapped_h: break
+                                    _ov_raw = sched[_ov_h][_hd]
+                                    if not is_work(_ov_raw): continue
+                                    if _ov_raw in ("上課", "公差"): continue
+                                    if (_ov_h, _hd) in _locked_set5: continue
+                                    _swap_s = "D" if str(_ov_raw).startswith("D") else _ov_raw
+                                    if _swap_s not in ("D", "E", "N", "12-8"): continue
+                                    if sched[_un_h][_hd] not in ["", "上課"]: continue
+                                    if (_un_h, _hd) in _locked_set5: continue
+                                    # under 在此假日能合法排 _swap_s
+                                    if not _legal_place_shift(_un_h, _hd, _swap_s): continue
+                                    # over 讓出後仍達個人應上班天數（不低於 personal_targets）
+                                    _ov_worked = sum(1 for v in sched[_ov_h] if is_work(v))
+                                    if _ov_worked - 1 < personal_targets.get(_ov_h, 0): continue
+                                    # under 接班後不超出個人應上班天數
+                                    _un_worked = sum(1 for v in sched[_un_h] if is_work(v))
+                                    if _un_worked + 1 > personal_targets.get(_un_h, 0): continue
+                                    # 執行單格轉讓
+                                    sched[_ov_h][_hd] = ""
+                                    sched[_un_h][_hd] = _swap_s
+                                    _swapped_h = True
+                                    break
                     if not _swapped_h:
                         break
 
