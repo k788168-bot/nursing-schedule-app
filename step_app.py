@@ -4187,6 +4187,12 @@ if st.session_state.step >= 5:
             def _equalize_holiday_pool(pool_set):
                 """對指定人員集合執行假日出勤均等化（支援 D/E/N/12-8 所有班別互換）"""
                 if not pool_set: return
+                # ── 假日目標：以池內最高應上班天數為基準，所有人使用同一目標 ──
+                # 請假多的人與全勤同仁使用相同假日目標，確保假日出勤公平分攤
+                _hol_count      = len(_hol_day_set)
+                _max_pt         = max((personal_targets.get(i, 0) for i in pool_set), default=0)
+                _hol_target_val = round(_max_pt / max(month_days, 1) * _hol_count)
+                _hol_target     = {i: _hol_target_val for i in pool_set}
                 for _hit in range(500):
                     # 計算有效假日消耗數：實際出勤 + 特殊假別（公假/喪假/病假等）均視為「已消耗」
                     # 目的：避免因特殊假別而讓護理師在均等化中被誤認為「假日出勤不足」
@@ -4196,10 +4202,24 @@ if st.session_state.step >= 5:
                     if not _hc: break
                     _hmax = max(_hc.values())
                     _hmin = min(_hc.values())
-                    if _hmax - _hmin <= 1: break
 
-                    _over_lh  = [i for i, c in _hc.items() if c == _hmax]
-                    _under_lh = [i for i, c in _hc.items() if c == _hmin]
+                    # 停止條件：全體差距 ≤ 1 且無人低於個人假日目標
+                    _below_target = [i for i, c in _hc.items() if c < _hol_target[i]]
+                    if _hmax - _hmin <= 1 and not _below_target:
+                        break
+
+                    # OVER：高於個人目標者優先讓出；若無，退回全體最大值
+                    _personal_over = [i for i, c in _hc.items() if c > _hol_target[i]]
+                    if _personal_over:
+                        _over_lh = sorted(_personal_over, key=lambda i: -_hc[i])
+                    else:
+                        _over_lh = [i for i, c in _hc.items() if c == _hmax]
+
+                    # UNDER：低於個人目標者優先補足；若無，退回全體最小值
+                    if _below_target:
+                        _under_lh = sorted(_below_target, key=lambda i: _hc[i])
+                    else:
+                        _under_lh = [i for i, c in _hc.items() if c == _hmin]
 
                     _swapped_h = False
                     for _ov_h in _over_lh:
@@ -4267,6 +4287,31 @@ if st.session_state.step >= 5:
                                     # 執行單格轉讓
                                     sched[_ov_h][_hd] = ""
                                     sched[_un_h][_hd] = _swap_s
+                                    _swapped_h = True
+                                    break
+                    # ── 策略三：換日不加班（under 已達標但假日出勤仍偏低）──────────
+                    # under 把某個「平日班」挪到「假日」：平日變休、假日補班、總班數不變
+                    # 適用：包班人員因日曆結構導致全部班次落在平日（假日出勤 = 0）的情況
+                    if not _swapped_h:
+                        for _un_h in _under_lh:
+                            if _swapped_h: break
+                            for _hd in sorted(_hol_day_set):
+                                if _swapped_h: break
+                                if sched[_un_h][_hd] not in ["", "上課"]: continue
+                                if (_un_h, _hd) in _locked_set5: continue
+                                for _wd in sorted(_wday_set):
+                                    if _swapped_h: break
+                                    _un_wd_raw = sched[_un_h][_wd]
+                                    if not is_work(_un_wd_raw): continue
+                                    if _un_wd_raw in ("上課", "公差"): continue
+                                    if (_un_h, _wd) in _locked_set5: continue
+                                    _mv_s = "D" if str(_un_wd_raw).startswith("D") else _un_wd_raw
+                                    if _mv_s not in ("D", "E", "N", "12-8"): continue
+                                    # 假日能合法排此班別（連班/休息間隔等）
+                                    if not _legal_place_shift(_un_h, _hd, _mv_s): continue
+                                    # 執行換日：平日變休，假日補班，總班數不變
+                                    sched[_un_h][_wd] = ""
+                                    sched[_un_h][_hd] = _mv_s
                                     _swapped_h = True
                                     break
                     if not _swapped_h:
@@ -4829,16 +4874,44 @@ if st.session_state.step >= 6:
                 if _sc6e > 5: return False
                 return True
 
+            # ── 夜班個人目標：全月E+N+12-8配額總數 ÷ 符合資格人數，所有人同一目標 ──
+            # 不論個人請假多少，夜班目標一律相同，確保假日均等分攤
+            _total_night_quota6 = sum(
+                int(edited_quota_df.iloc[d - 1]["E班"]) +
+                int(edited_quota_df.iloc[d - 1]["N班"]) +
+                int(edited_quota_df.iloc[d - 1]["12-8"])
+                for d in range(1, month_days + 1)
+            )
+            _night_target_val6 = (
+                round(_total_night_quota6 / len(_night_elig_set6))
+                if _night_elig_set6 else 0
+            )
+            _night_target6 = {i: _night_target_val6 for i in _night_elig_set6}
+
             for _nit6 in range(500):
                 _nc6 = {i: sum(1 for v in sched[i] if v in ("E", "N", "12-8"))
                         for i in _night_elig_set6}
                 if not _nc6: break
                 _nmax6 = max(_nc6.values())
                 _nmin6 = min(_nc6.values())
-                if _nmax6 - _nmin6 <= 1: break
 
-                _over_l6  = [i for i, c in _nc6.items() if c == _nmax6]
-                _under_l6 = [i for i, c in _nc6.items() if c == _nmin6]
+                # 停止條件：全體差距 ≤ 1 且無人低於個人夜班目標
+                _below_night6 = [i for i, c in _nc6.items() if c < _night_target6[i]]
+                if _nmax6 - _nmin6 <= 1 and not _below_night6:
+                    break
+
+                # OVER：高於個人目標者優先讓出；若無，退回全體最大值
+                _personal_over6 = [i for i, c in _nc6.items() if c > _night_target6[i]]
+                if _personal_over6:
+                    _over_l6 = sorted(_personal_over6, key=lambda i: -_nc6[i])
+                else:
+                    _over_l6 = [i for i, c in _nc6.items() if c == _nmax6]
+
+                # UNDER：低於個人目標者優先補足；若無，退回全體最小值
+                if _below_night6:
+                    _under_l6 = sorted(_below_night6, key=lambda i: _nc6[i])
+                else:
+                    _under_l6 = [i for i, c in _nc6.items() if c == _nmin6]
 
                 _swapped6 = False
                 for _ov6 in _over_l6:
@@ -5295,18 +5368,6 @@ if st.session_state.step >= 6:
                 st.error(f"🚨 共 {total_violators} 位人員有違規，詳見下方違規明細")
             st.write("##### 違規明細")
             st.dataframe(violation_df, use_container_width=True)
-
-        # 預白班：建立 Dx 標記版副本供 Excel 匯出使用
-        _export_sched6 = apply_prewhite_dx(st.session_state.final_sched.copy(), ai_df, month_days)
-        output = build_colored_excel(
-            _export_sched6,
-            stats_df,
-            st.session_state.explanation_df,
-            shortages_export,
-            month_days,
-            per_week_df=per_week_df,
-            violation_df=violation_df
-        )
 
         st.write("---")
         col_btn_back, col_btn_download, col_btn_go7, col_btn_reset = st.columns([1, 2, 2, 1])
