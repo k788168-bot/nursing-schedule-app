@@ -1072,6 +1072,165 @@ with st.sidebar:
     elif _val_file and st.session_state.get("ai_df") is None:
         st.warning("請先完成第一步（載入人員資料），再使用驗證站")
 
+    st.divider()
+    st.markdown("## 📊 加班線分配 + 變形工時審查")
+    st.caption("上傳已排好班別的班表，系統自動分配白班加班線並驗證四周變形工時，不更動任何班別。")
+    _ot_file = st.file_uploader("上傳班表 Excel（D/E/N/12-8 已排好）", type=["xlsx"], key="ot_upload")
+    if _ot_file and st.session_state.get("ai_df") is not None:
+        try:
+            _ai_ot = st.session_state.ai_df
+            _md_ot = st.session_state.month_days
+            _hol_ot = set(st.session_state.holiday_list)
+            _sat_ot = st.session_state.saturdays_list
+            _sun_ot = st.session_state.sundays_list
+            _nat_ot = st.session_state.nat_holidays_list
+            # 讀取上傳班表
+            _ot_xl = pd.read_excel(_ot_file, sheet_name=0, header=0)
+            _nm_col = [c for c in _ot_xl.columns if "姓名" in str(c)]
+            if not _nm_col:
+                st.error("找不到「姓名」欄，請確認格式正確")
+                st.stop()
+            _ot_xl = _ot_xl.rename(columns={_nm_col[0]: "姓名"})
+            _ot_xl["姓名"] = _ot_xl["姓名"].astype(str).str.strip()
+            # 對齊姓名索引
+            _day_cols_ot = [str(d) for d in range(1, _md_ot + 1)]
+            _ai_names_ot = _ai_ot["姓名"].str.strip().tolist()
+            _ot_aligned = _ai_ot[["姓名"]].copy().reset_index(drop=True)
+            for _dc in _day_cols_ot:
+                _ot_aligned[_dc] = ""
+            for _, _vrow in _ot_xl.iterrows():
+                _vname = str(_vrow["姓名"]).strip()
+                if _vname in _ai_names_ot:
+                    _ridx = _ai_names_ot.index(_vname)
+                    for _dc in _day_cols_ot:
+                        if _dc in _vrow.index:
+                            _v = str(_vrow[_dc]).strip()
+                            _ot_aligned.at[_ridx, _dc] = "" if _v in ("nan", "NaN", "") else _v
+            # 建立 sched dict（index 為 ai_df index）
+            _sched_ot = {}
+            for _i in _ai_ot.index:
+                _sched_ot[_i] = [""] + [str(_ot_aligned.at[_i, _dc]).strip() for _dc in _day_cols_ot]
+            # 快取
+            _cache_pref_ot  = {i: str(row.get("包班意願","")).strip() for i, row in _ai_ot.iterrows()}
+            _cache_title_ot = {i: str(row.get("職稱","")).strip() for i, row in _ai_ot.iterrows()}
+            _class_map_ot   = {i: [s.strip() for s in str(row.get("上課日期","")).split(",") if s.strip().isdigit()] for i, row in _ai_ot.iterrows()}
+            # ── 加班線均分（完整複製 Step 6 邏輯）────────────────────
+            _ot_days_count = {i: 0 for i in _ai_ot.index}
+            _ot_history    = {i: [] for i in _ai_ot.index}
+            for _d_ot in range(1, _md_ot + 1):
+                if _d_ot in _hol_ot: continue
+                _dw_ot = [i for i in _ai_ot.index if _sched_ot[i][_d_ot] == "D"]
+                if not _dw_ot: continue
+                _elig_ot = []
+                for _i in _dw_ot:
+                    if _cache_pref_ot[_i] != "": continue
+                    if _cache_title_ot[_i] in NO_HOL_ADMIN: continue
+                    _y_ot = _sched_ot[_i][_d_ot - 1] if _d_ot > 1 else ""
+                    if _y_ot == "12-8": continue
+                    _elig_ot.append(_i)
+                _elig_ot.sort(key=lambda x: (_ot_days_count[x], random.random()))
+                _num_ot = min(14, len(_elig_ot))
+                _sel_ot = _elig_ot[:_num_ot]
+                _heavy_ot = {i for i in _sel_ot if (_sched_ot[i][_d_ot - 1] if _d_ot > 1 else "") in ["D1","D2","D3"]}
+                def _avg_ot(i):
+                    return sum(_ot_history[i]) / len(_ot_history[i]) if _ot_history[i] else 15.0
+                _leaders_ot = [x for x in _sel_ot if _cache_title_ot[x] == "組長"]
+                _class_ot   = [x for x in _sel_ot if x not in _leaders_ot and str(_d_ot) in _class_map_ot.get(x, [])]
+                _regs_ot    = [x for x in _sel_ot if x not in _leaders_ot and x not in _class_ot]
+                _leaders_ot.sort(key=_avg_ot, reverse=True)
+                _regs_ot.sort(key=_avg_ot, reverse=True)
+                _slots_ot = list(range(1, _num_ot + 1))
+                _assign_ot = {}
+                for _p in _leaders_ot:
+                    _vs = [s for s in _slots_ot if s >= 6]
+                    _ch = min(_vs) if _vs else (max(_slots_ot) if _slots_ot else None)
+                    if _ch: _slots_ot.remove(_ch); _assign_ot[_p] = _ch
+                for _p in _class_ot:
+                    _vs = [s for s in _slots_ot if s >= 8]
+                    if _vs:
+                        _ch = min(_vs); _slots_ot.remove(_ch); _assign_ot[_p] = _ch
+                for _p in _regs_ot:
+                    if not _slots_ot: break
+                    _valid = [s for s in _slots_ot if s >= 4] if _p in _heavy_ot else _slots_ot
+                    _ch = min(_valid) if _valid else min(_slots_ot)
+                    _slots_ot.remove(_ch); _assign_ot[_p] = _ch
+                for _i in _dw_ot:
+                    if _cache_pref_ot[_i] != "": continue
+                    if _cache_title_ot[_i] in NO_HOL_ADMIN: continue
+                    if _i in _assign_ot:
+                        _sched_ot[_i][_d_ot] = f"D{_assign_ot[_i]}"
+                        _ot_days_count[_i] += 1
+                        _ot_history[_i].append(_assign_ot[_i])
+                    else:
+                        _ot_history[_i].append(15)
+            # OT 天數均等後處理
+            _elig_ot_set = {i for i in _ai_ot.index if _cache_pref_ot[i] == "" and _cache_title_ot[i] not in NO_HOL_ADMIN}
+            for _ in range(500):
+                _cts = {i: _ot_days_count[i] for i in _elig_ot_set}
+                if not _cts or max(_cts.values()) - min(_cts.values()) <= 1: break
+                _ov_l = [i for i, c in _cts.items() if c == max(_cts.values())]
+                _un_l = [i for i, c in _cts.items() if c == min(_cts.values())]
+                _sw = False
+                for _ov in _ov_l:
+                    if _sw: break
+                    for _un in _un_l:
+                        if _sw: break
+                        for _d in range(1, _md_ot + 1):
+                            if _d in _hol_ot: continue
+                            _vo = _sched_ot[_ov][_d]; _vu = _sched_ot[_un][_d]
+                            if not (isinstance(_vo, str) and _vo.startswith("D") and len(_vo) > 1): continue
+                            if _vu != "D": continue
+                            if (_sched_ot[_un][_d - 1] if _d > 1 else "") == "12-8": continue
+                            _ln = int(_vo[1:])
+                            _sched_ot[_un][_d] = _vo; _sched_ot[_ov][_d] = "D"
+                            _ot_days_count[_un] += 1; _ot_days_count[_ov] -= 1
+                            if _ln in _ot_history[_ov]: _ot_history[_ov].remove(_ln)
+                            _ot_history[_un].append(_ln)
+                            _sw = True; break
+                if not _sw: break
+            # 產出結果 DataFrame
+            _result_ot = pd.DataFrame({"姓名": _ai_ot["姓名"]})
+            for _d in range(1, _md_ot + 1):
+                _result_ot[str(_d)] = [_sched_ot[i][_d] for i in _ai_ot.index]
+            st.success("加班線分配完成！")
+            # 顯示班表
+            with st.expander("📋 含加班線班表預覽", expanded=True):
+                _dcols_ot = [str(d) for d in range(1, _md_ot + 1)]
+                _disp_ot = _result_ot.copy()
+                for _c in _dcols_ot:
+                    _disp_ot[_c] = _disp_ot[_c].apply(abbrev_display)
+                st.dataframe(_disp_ot.style.map(color_shifts, subset=_dcols_ot), use_container_width=True)
+            # OT 統計
+            with st.expander("📊 加班天數統計", expanded=False):
+                _ot_stat = [{"姓名": _ai_ot.at[i,"姓名"], "加班天數": _ot_days_count[i], "平均線位": round(sum(_ot_history[i])/len(_ot_history[i]),1) if _ot_history[i] else "-"}
+                            for i in _ai_ot.index if _cache_pref_ot[i] == "" and _cache_title_ot[i] not in NO_HOL_ADMIN]
+                st.dataframe(pd.DataFrame(_ot_stat).sort_values("加班天數"), use_container_width=True, hide_index=True)
+            # 四周變形工時審查
+            with st.expander("⚖️ 勞基法四周變形工時審查", expanded=True):
+                _pw_ot, _viol_ot = build_four_week_review(_result_ot, _ai_ot, _md_ot)
+                st.dataframe(_pw_ot, use_container_width=True, hide_index=True)
+                _n_viol = len([r for _, r in _pw_ot.iterrows() if "🚨" in str(r.get("合法判斷",""))])
+                if _n_viol == 0:
+                    st.success("✅ 全體人員均符合四周變形工時規定，無違規！")
+                else:
+                    st.error(f"🚨 共 {_n_viol} 位人員有違規")
+                    st.dataframe(_viol_ot, use_container_width=True, hide_index=True)
+            # 下載含加班線的班表
+            import io as _io_ot
+            _dl_ot = _io_ot.BytesIO()
+            with pd.ExcelWriter(_dl_ot, engine="openpyxl") as _wr_ot:
+                _result_ot.to_excel(_wr_ot, sheet_name="含加班線班表", index=False)
+                _pw_ot.to_excel(_wr_ot, sheet_name="變形工時審查", index=False)
+                _viol_ot.to_excel(_wr_ot, sheet_name="違規明細", index=False)
+            st.download_button("📥 下載含加班線班表", data=_dl_ot.getvalue(),
+                               file_name="Schedule_With_OT.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="dl_ot")
+        except Exception as _e_ot:
+            st.error(f"處理失敗：{_e_ot}，請確認班表格式（第一欄為姓名，之後為1~{st.session_state.get('month_days',31)}日）")
+    elif _ot_file and st.session_state.get("ai_df") is None:
+        st.warning("請先完成第一步（載入人員資料），再使用此功能")
+
 st.title("🏥 層級式護理輔助排班工作站")
 st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.session_state.step} 步 / 共 7 步")
 
