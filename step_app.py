@@ -848,14 +848,64 @@ def build_four_week_review(final_sched_df, ai_df, month_days, prev_buffer=None):
         # ── 滑動窗格違規掃描 ──────────────────────────────────
         nurse_viols = []
 
-        # ── 本月內規則（與原本相同，改用 _get_shift 查詢）──────────
+        # ── 本月內規則（改用 _get_shift 查詢）──────────
 
-        # 規則 1：任意 7 天窗格，工作天 ≤ 6
-        for start in range(1, month_days - 5):
-            end = start + 6
-            work_cnt = sum(1 for d in range(start, end + 1) if is_work(_get_shift(d)))
-            if work_cnt > 6:
-                nurse_viols.append(f"連7日工作{work_cnt}天（第{start}~{end}日），每週應至少1天例假")
+        # 規則 1：護理人員例假可移動，但兩次例假間距不可超過 12 天
+        # 等同：連續出勤不能超過 12 天（若超過，必有某段 13 天以上無例假）
+        # 另外，手動班表中連續 6 天出勤屬警示（自動排班已限制≤5天）
+        _li_days_full = [d for d in range(1, month_days + 1)
+                         if str(_get_shift(d)).strip() in ("例", "例假")]
+        # 加入前月最後一個例假（若有緩衝）
+        if _pbuf:
+            _prev_li = [d for d in range(-13, 0) if str(_pbuf.get(d,"")).strip() in ("例","例假")]
+            _li_anchor = max(_prev_li) if _prev_li else None
+        else:
+            _li_anchor = None
+
+        _all_li = (([_li_anchor] if _li_anchor else []) + _li_days_full)
+
+        # 檢查月初到第一個例假的間距
+        _first_li = _li_days_full[0] if _li_days_full else None
+        if _first_li:
+            _gap_before = _first_li - (_li_anchor if _li_anchor else -13) - 1
+            if _gap_before > 12:
+                nurse_viols.append(
+                    f"月初前 13 天內無例假（最近例假在前月第{_li_anchor or '?'}日），"
+                    f"例假間距 {_gap_before + 1} 天 > 12 天"
+                )
+        elif not _li_days_full:
+            nurse_viols.append("本月整月無例假，違反護理人員例假規定")
+
+        # 檢查相鄰例假間距
+        for _j in range(1, len(_li_days_full)):
+            _gap = _li_days_full[_j] - _li_days_full[_j - 1]
+            if _gap > 13:  # 兩例假之間超過 13 天（即中間超過 12 天無例假）
+                nurse_viols.append(
+                    f"第 {_li_days_full[_j-1]} 日到第 {_li_days_full[_j]} 日例假，"
+                    f"間距 {_gap} 天 > 13 天（違反例假間距 ≤ 12 天規定）"
+                )
+
+        # 檢查最後一個例假到月底的間距
+        if _li_days_full:
+            _gap_after = month_days - _li_days_full[-1]
+            if _gap_after > 12:
+                nurse_viols.append(
+                    f"最後例假在第 {_li_days_full[-1]} 日，月底前尚有 {_gap_after} 天無例假 > 12 天"
+                )
+
+        # 連續出勤超過 5 天：警示（手動調整可能發生，但自動排班不應產生）
+        _consec = 0
+        for d in range(1, month_days + 1):
+            if is_work(_get_shift(d)):
+                _consec += 1
+                if _consec > 5:
+                    nurse_viols.append(
+                        f"第 {d - _consec + 1}~{d} 日連續出勤 {_consec} 天，"
+                        f"超過 5 天（⚠️ 手動調整所致，請確認是否符合院方規定）"
+                    )
+                    break  # 只報告第一個違規段，避免重複
+            else:
+                _consec = 0
 
         # 規則 2：任意 14 天窗格（含跨月延伸）
         _r2_start = max(1, 1 - 13) if _pbuf else 1  # 有前月緩衝時從本月第1天往前延伸
@@ -1468,7 +1518,7 @@ if st.session_state.step == 1:
 # ==========================================
 if st.session_state.step >= 2:
     st.divider()
-    st.header("2️⃣ 第二步：帶入人員名單與動態配額設定")
+    st.header("2️⃣ 第二步：帶入預班表")
     
     if st.session_state.step == 2:
         uploaded_ai = st.file_uploader("📂 上傳護理師參數名單 (Excel 檔)", type=["xlsx", "xls"])
@@ -5357,7 +5407,7 @@ if st.session_state.step >= 7:
                 for _c in _day_cols7:
                     _disp7[_c] = _disp7[_c].apply(abbrev_display)
                 st.dataframe(
-                    _disp7.style.map(color_classified, subset=_day_cols7),
+                    build_schedule_with_counts(_disp7, st.session_state.final_sched, _day_cols7, ai_df),
                     use_container_width=True
                 )
 
