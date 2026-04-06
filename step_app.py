@@ -4309,6 +4309,17 @@ if st.session_state.step >= 5:
                                     if _mv_s not in ("D", "E", "N", "12-8"): continue
                                     # 假日能合法排此班別（連班/休息間隔等）
                                     if not _legal_place_shift(_un_h, _hd, _mv_s): continue
+                                    # ★ 確認讓出平日班後，該平日仍符合配額下限
+                                    _wd_qcol = {"D": "D班", "E": "E班", "N": "N班", "12-8": "12-8"}.get(_mv_s, "D班")
+                                    _wd_qrow = edited_quota_df[edited_quota_df["日期"] == str(_wd)]
+                                    if not _wd_qrow.empty:
+                                        _wd_quota_min = int(_wd_qrow.iloc[0].get(_wd_qcol, 0))
+                                        _wd_curr = sum(
+                                            1 for _qi in ai_df.index
+                                            if (str(sched[_qi][_wd]).strip().startswith("D") if _mv_s == "D"
+                                                else str(sched[_qi][_wd]).strip() == _mv_s)
+                                        )
+                                        if _wd_curr - 1 < _wd_quota_min: continue  # 讓出後低於配額，跳過
                                     # 執行換日：平日變休，假日補班，總班數不變
                                     sched[_un_h][_wd] = ""
                                     sched[_un_h][_hd] = _mv_s
@@ -4876,12 +4887,15 @@ if st.session_state.step >= 6:
 
             # ── 夜班個人目標：全月E+N+12-8配額總數 ÷ 符合資格人數，所有人同一目標 ──
             # 不論個人請假多少，夜班目標一律相同，確保假日均等分攤
-            _total_night_quota6 = sum(
-                int(edited_quota_df.iloc[d - 1]["E班"]) +
-                int(edited_quota_df.iloc[d - 1]["N班"]) +
-                int(edited_quota_df.iloc[d - 1]["12-8"])
-                for d in range(1, month_days + 1)
-            )
+            _total_night_quota6 = 0
+            for _d6q in range(1, month_days + 1):
+                _row6q = edited_quota_df[edited_quota_df["日期"] == str(_d6q)]
+                if not _row6q.empty:
+                    _total_night_quota6 += (
+                        int(_row6q.iloc[0].get("E班", 0)) +
+                        int(_row6q.iloc[0].get("N班", 0)) +
+                        int(_row6q.iloc[0].get("12-8", 0))
+                    )
             _night_target_val6 = (
                 round(_total_night_quota6 / len(_night_elig_set6))
                 if _night_elig_set6 else 0
