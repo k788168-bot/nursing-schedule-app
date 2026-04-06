@@ -41,6 +41,7 @@ _CHECKPOINT_KEYS = [
     "pack_warnings", "target_warnings", "shortages_export",
     "explanation_df", "s6_deficits",
     "extra_staffing_df",
+    "prev_month_buffer",
 ]
 
 def _make_checkpoint() -> bytes:
@@ -72,6 +73,8 @@ _ABBREV_MAP = {
     "例假":  "例",
     "休假":  "休",
     "國定":  "國",
+    "公差":  "公",   # 公差縮寫
+    "特休":  "V",    # 特休縮寫
 }
 
 def abbrev_display(val):
@@ -114,7 +117,15 @@ def build_schedule_with_counts(disp_df, src_df, day_cols, ai_df_local):
                         and str(ai_df_local.at[i, "職稱"]).strip() not in NO_HOL_ADMIN
                     )
                 else:
-                    _cnt = sum(1 for i in ai_df_local.index if str(src_df.at[i, _dc]).strip() == _key)
+                    # E★/N★（控台班別）與 E/N 同等計入班別人數
+                    _e_variants = {"E", "E★", "E*"}
+                    _n_variants = {"N", "N★", "N*"}
+                    if _key == "E":
+                        _cnt = sum(1 for i in ai_df_local.index if str(src_df.at[i, _dc]).strip() in _e_variants)
+                    elif _key == "N":
+                        _cnt = sum(1 for i in ai_df_local.index if str(src_df.at[i, _dc]).strip() in _n_variants)
+                    else:
+                        _cnt = sum(1 for i in ai_df_local.index if str(src_df.at[i, _dc]).strip() == _key)
             except Exception:
                 _cnt = 0
             _row[_dc] = str(_cnt) if _cnt > 0 else "0"
@@ -181,12 +192,15 @@ def color_shifts(val):
     v = str(val).upper().strip()
     if v.startswith('D'): return 'background-color: #d4edda; color: #155724;'
     if v == 'E': return 'background-color: #fff3cd; color: #856404;'
+    if v in ('E★', 'E*'): return 'background-color: #ffe08a; color: #6b4c00; font-weight: bold;'  # E加班
     if v == 'N': return 'background-color: #e2d9f3; color: #4a148c;'
+    if v in ('N★', 'N*'): return 'background-color: #c9b8f0; color: #3a006f; font-weight: bold;'  # N加班
     if v == '12-8': return 'background-color: #cce5ff; color: #004085;'
     if v == 'O': return 'background-color: #dee2e6; color: #495057;'
     if v == '休': return 'background-color: #f1f3f5; color: #adb5bd;'
     if v == '上課': return 'background-color: #ffeeba; color: #856404; font-weight: bold;'
     if v == '公差': return 'background-color: #fad7a0; color: #784212; font-weight: bold;'
+    if v == '公':   return 'background-color: #fad7a0; color: #784212; font-weight: bold;'  # 公差縮寫
     # 預覽用標示（帶入班表時特別顯示，實際資料仍儲存為 O / D）
     v_raw = str(val).strip()
     if v_raw == '預假':   return 'background-color: #cff4fc; color: #055160; font-style: italic;'
@@ -196,6 +210,7 @@ def color_shifts(val):
     if v_raw == '預': return 'background-color: #cff4fc; color: #055160; font-style: italic;'
     if v_raw == '例': return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
     if v_raw == '國': return 'background-color: #ffecd2; color: #8a4519; font-weight: bold;'
+    if v_raw == 'V':  return 'background-color: #f3e8ff; color: #6b21a8; font-weight: bold;'  # 特休
     if v != '': return 'background-color: #ffe4e8; color: #c0392b;'  # 特殊假別（公假、喪假等）
     return ''
 
@@ -204,14 +219,18 @@ def color_classified(val):
     v = str(val).strip()
     vu = v.upper()
     if vu.startswith('D'): return 'background-color:#d4edda;color:#155724;'
-    if vu == 'E':    return 'background-color:#fff3cd;color:#856404;'
-    if vu == 'N':    return 'background-color:#e2d9f3;color:#4a148c;'
+    if vu == 'E':          return 'background-color:#fff3cd;color:#856404;'
+    if vu in ('E★','E*'): return 'background-color:#ffe08a;color:#6b4c00;font-weight:bold;'
+    if vu == 'N':          return 'background-color:#e2d9f3;color:#4a148c;'
+    if vu in ('N★','N*'): return 'background-color:#c9b8f0;color:#3a006f;font-weight:bold;'
     if v == '12-8':  return 'background-color:#cce5ff;color:#004085;'
     if v == '上課':  return 'background-color:#ffeeba;color:#856404;font-weight:bold;'
     if v == '公差':  return 'background-color:#fad7a0;color:#784212;font-weight:bold;'
+    if v == '公':    return 'background-color:#fad7a0;color:#784212;font-weight:bold;'  # 公差縮寫
     if v == '例假':  return 'background-color:#f8d7da;color:#721c24;font-weight:bold;'
     if v == '休假':  return 'background-color:#e2e3e5;color:#383d41;'
     if v == '國定':  return 'background-color:#ffecd2;color:#8a4519;font-weight:bold;'
+    if v == '特休':  return 'background-color:#f3e8ff;color:#6b21a8;font-weight:bold;'  # 特休
     if v == '預假':  return 'background-color:#cff4fc;color:#055160;font-style:italic;'
     if v == '預長假': return 'background-color:#ffe5b4;color:#7a3e00;font-weight:bold;'
     # 縮寫顯示對應色彩
@@ -219,21 +238,33 @@ def color_classified(val):
     if v == '例': return 'background-color:#f8d7da;color:#721c24;font-weight:bold;'
     if v == '休': return 'background-color:#e2e3e5;color:#383d41;'
     if v == '國': return 'background-color:#ffecd2;color:#8a4519;font-weight:bold;'
-    if v == 'O':     return 'background-color:#d1ecf1;color:#0c5460;'
-    if v != '':      return 'background-color:#ffe4e8;color:#c0392b;'  # 特殊假別
+    if v == 'V':  return 'background-color:#f3e8ff;color:#6b21a8;font-weight:bold;'  # 特休縮寫
+    if v == 'O':  return 'background-color:#d1ecf1;color:#0c5460;'
+    if v != '':   return 'background-color:#ffe4e8;color:#c0392b;'  # 其他特殊假別
     return ''
 
 def is_work(val):
-    v = str(val).upper().strip()
-    return v in ["D", "E", "N", "12-8", "上課", "公差"] or v.startswith("D")
+    v = str(val).strip()
+    vu = v.upper()
+    # E★/N★/D★ 為加班班別，仍算出勤；D值由 startswith("D") 覆蓋
+    # 公差 / 公（縮寫）算出勤；特休/V、國/例/休 不算出勤
+    if vu in ("E★", "E*"): return True
+    if vu in ("N★", "N*"): return True
+    return vu in ["D", "E", "N", "12-8", "上課", "公差", "公"] or vu.startswith("D")
 
 _CORE_SHIFTS = {"D", "E", "N", "12-8"}
 
 def _shift_norm(v):
     """將班別值正規化為核心班別鍵（D/E/N/12-8）或 None"""
-    if not v or v == "O": return None
-    if v.startswith("D") or v in ("上課", "公差"): return "D"
-    if v in _CORE_SHIFTS: return v
+    vs = str(v).strip()
+    vu = vs.upper()
+    if not vs or vu in ("O", "NAN", ""): return None
+    # E★/N★：加班班別，歸回 E/N 計算換班間距
+    if vu in ("E★", "E*"): return "E"
+    if vu in ("N★", "N*"): return "N"
+    # D值（行政假日白班）、上課、公差、公（公差縮寫）均視為 D 班
+    if vu.startswith("D") or vs in ("上課", "公差", "公"): return "D"
+    if vs in _CORE_SHIFTS: return vs
     return None
 
 # ── A/B 組別排班條件 ─────────────────────────────────────────────
@@ -743,7 +774,7 @@ def build_colored_excel(final_sched_df, stats_df, explanation_df, shortages_expo
 # ============================================================
 # ⚖️ 四周變形工時審查引擎（台灣勞基法 §30-1）
 # ============================================================
-def build_four_week_review(final_sched_df, ai_df, month_days):
+def build_four_week_review(final_sched_df, ai_df, month_days, prev_buffer=None):
     """
     四周變形工時合法性審查。
     法規依據：
@@ -764,13 +795,22 @@ def build_four_week_review(final_sched_df, ai_df, month_days):
 
     def _timing_key(val):
         """將班別值對應到換班時間 key（D/E/N/12-8），非上班格回傳 None"""
-        v = str(val).upper().strip()
-        if v == "D" or (v.startswith("D") and v[1:].isdigit()):
+        v = str(val).strip()
+        vu = v.upper()
+        # D 系列（D/D1-D14/D★/D值 等）
+        if vu.startswith("D"):
             return "D"
-        if v == "E":     return "E"
-        if v == "N":     return "N"
-        if v == "12-8":  return "12-8"
-        if v == "公差":  return "D"   # 公差 08-16，換班間距同白班
+        # E 及 E★（控台小夜，時間同 E 班）
+        if vu in ("E", "E★", "E*"):
+            return "E"
+        # N 及 N★（控台大夜，時間同 N 班）
+        if vu in ("N", "N★", "N*"):
+            return "N"
+        if v == "12-8":
+            return "12-8"
+        # 公差 / 公 視同白班時間（08-16）
+        if v in ("公差", "公"):
+            return "D"
         return None
     # ── 每週固定區塊統計（週1~4 及尾餘） ─────────────────────
     week_blocks = []
@@ -788,6 +828,17 @@ def build_four_week_review(final_sched_df, ai_df, month_days):
         title = str(row.get("職稱", "")).strip()
         s_vals = list(final_sched_df.iloc[nurse_idx].values[1:])   # index 0 = 姓名
 
+        # ── 建立含前月緩衝的班表查詢函數 ──────────────────────────
+        # prev_buffer: {姓名: {-13: 'D', ..., -1: 'N'}}
+        # 正數日期查本月 s_vals；負數日期查前月緩衝
+        _pname = str(row["姓名"]).strip()
+        _pbuf  = (prev_buffer or {}).get(_pname, {})
+        def _get_shift(d_idx):
+            """d_idx: 正數=本月第d天(1-based)，負數=前月倒數"""
+            if d_idx >= 1:
+                return s_vals[d_idx - 1] if 1 <= d_idx <= month_days else ""
+            return _pbuf.get(d_idx, "")
+
         week_counts = []
         for (wb_start, wb_end) in week_blocks:
             cnt = sum(1 for d in range(wb_start, wb_end + 1) if is_work(s_vals[d - 1]))
@@ -797,31 +848,54 @@ def build_four_week_review(final_sched_df, ai_df, month_days):
         # ── 滑動窗格違規掃描 ──────────────────────────────────
         nurse_viols = []
 
+        # ── 本月內規則（與原本相同，改用 _get_shift 查詢）──────────
+
         # 規則 1：任意 7 天窗格，工作天 ≤ 6
         for start in range(1, month_days - 5):
             end = start + 6
-            work_cnt = sum(1 for d in range(start, end + 1) if is_work(s_vals[d - 1]))
+            work_cnt = sum(1 for d in range(start, end + 1) if is_work(_get_shift(d)))
             if work_cnt > 6:
                 nurse_viols.append(f"連7日工作{work_cnt}天（第{start}~{end}日），每週應至少1天例假")
 
-        # 規則 2：任意 14 天窗格，工作天 ≤ 12
-        for start in range(1, month_days - 12):
+        # 規則 2：任意 14 天窗格（含跨月延伸）
+        _r2_start = max(1, 1 - 13) if _pbuf else 1  # 有前月緩衝時從本月第1天往前延伸
+        for start in range(_r2_start, month_days - 12):
             end = start + 13
-            work_cnt = sum(1 for d in range(start, end + 1) if is_work(s_vals[d - 1]))
+            if end < 1: continue  # 窗格完全在前月，跳過
+            work_cnt = sum(1 for d in range(start, end + 1) if is_work(_get_shift(d)))
             if work_cnt > 12:
-                nurse_viols.append(f"14日內工作{work_cnt}天（第{start}~{end}日），應 ≤ 12 天（14休2）")
+                loc = f"前月末至本月第{end}日" if start < 1 else f"第{start}~{end}日"
+                nurse_viols.append(f"14日內工作{work_cnt}天（{loc}），應 ≤ 12 天（14休2）")
 
         # 規則 3：任意 28 天窗格，工作天 ≤ 24
         for start in range(1, month_days - 26):
             end = start + 27
-            work_cnt = sum(1 for d in range(start, end + 1) if is_work(s_vals[d - 1]))
+            work_cnt = sum(1 for d in range(start, end + 1) if is_work(_get_shift(d)))
             if work_cnt > 24:
                 nurse_viols.append(f"28日內工作{work_cnt}天（第{start}~{end}日），應 ≤ 24 天（四週制）")
 
-        # 規則 4：§34 連續班次換班間距 ≥ 11 小時
+        # 規則 5（8週制）：任意 56 天窗格，工作天 ≤ 48
+        for start in range(1, month_days - 54):
+            end = start + 55
+            if end > month_days: break
+            work_cnt = sum(1 for d in range(start, end + 1) if is_work(_get_shift(d)))
+            if work_cnt > 48:
+                nurse_viols.append(f"56日內工作{work_cnt}天（第{start}~{end}日），應 ≤ 48 天（8週制）")
+
+        # 規則 4：§34 換班間距（含跨月：前月最後1天→本月第1天）
+        _prev_last = _get_shift(-1)
+        k_prev = _timing_key(_prev_last)
+        k_first = _timing_key(_get_shift(1))
+        if k_prev and k_first:
+            rest_h0 = (24 + _SHIFT_START_H[k_first]) - _SHIFT_END_H[k_prev]
+            if rest_h0 < 11:
+                nurse_viols.append(
+                    f"前月最後1日（{k_prev}班）→ 本月第1日（{k_first}班）：換班間距僅 {rest_h0} 小時，"
+                    f"違反 §34 應 ≥ 11 小時（跨月交接）"
+                )
         for d in range(1, month_days):
-            k1 = _timing_key(s_vals[d - 1])   # 第 d 日班別
-            k2 = _timing_key(s_vals[d])        # 第 d+1 日班別
+            k1 = _timing_key(_get_shift(d))
+            k2 = _timing_key(_get_shift(d + 1))
             if k1 and k2:
                 rest_h = (24 + _SHIFT_START_H[k2]) - _SHIFT_END_H[k1]
                 if rest_h < 11:
@@ -874,8 +948,12 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
                                   if str(sched_df.at[i, day_str]).startswith("D")
                                   and str(ai_df_local.at[i, "職稱"]).strip() not in NO_HOL_ADMIN]
                 else:
+                    # E★/N★（控台班別）視同 E/N，納入人力計算
+                    _s_variants = {s_c}
+                    if s_c == "E": _s_variants = {"E", "E★", "E*"}
+                    elif s_c == "N": _s_variants = {"N", "N★", "N*"}
                     act_nurses = [i for i in ai_df_local.index
-                                  if sched_df.at[i, day_str] == s_c
+                                  if str(sched_df.at[i, day_str]).strip() in _s_variants
                                   and str(ai_df_local.at[i, "職稱"]).strip() not in NO_HOL_ADMIN]
                     
                 act_c = len(act_nurses)
@@ -933,7 +1011,7 @@ def display_safety_radar(sched_df, quota_df, ai_df_local):
 
             # E 小夜班：A組需2人、B組需2人（同上，僅在 E 班配額 > 0 時才檢查）
             _req_e_r = int(quota_df[quota_df["日期"] == day_str].iloc[0]["E班"]) if not quota_df[quota_df["日期"] == day_str].empty else 0
-            nurses_e = [i for i in ai_df_local.index if sched_df.at[i, day_str] == "E"]
+            nurses_e = [i for i in ai_df_local.index if str(sched_df.at[i, day_str]).strip() in {"E", "E★", "E*"}]
             if _req_e_r > 0 and nurses_e:
                 ae = sum(1 for i in nurses_e if cache_group_radar.get(i) == "A")
                 be = sum(1 for i in nurses_e if cache_group_radar.get(i) == "B")
@@ -1063,7 +1141,10 @@ with st.sidebar:
                     display_safety_radar(_val_aligned, _quota, _ai)
                 # 勞基法四週變形工時審查
                 with st.expander("⚖️ 勞基法審查", expanded=True):
-                    _pw_df, _viol_df = build_four_week_review(_val_aligned, _ai, _md)
+                    _pw_df, _viol_df = build_four_week_review(
+                        _val_aligned, _ai, _md,
+                        prev_buffer=st.session_state.get("prev_month_buffer")
+                    )
                     if "🚨" in " ".join(_viol_df["合法判斷"].tolist() if "合法判斷" in _viol_df.columns else []):
                         st.error("發現勞基法違規")
                     st.dataframe(_viol_df, use_container_width=True)
@@ -1289,6 +1370,48 @@ with col_sun:
 with col_nat:
     temp_nats = st.multiselect("國定假日日期", [str(i) for i in range(1, temp_month_days + 1)], default=[str(d) for d in pure_nat_holidays], disabled=st.session_state.step > 1)
 
+st.write("#### 🔗 前月班表（選填）｜用於跨月連五 / 14日窗口 / 8週變形工時審查")
+st.caption("上傳上個月的最終班表 Excel，系統會擷取最後 13 天的班別做為本月排班的接軌緩衝，審查時自動偵測跨月違規。若不上傳則僅審查本月內的合法性。")
+
+_prev_file = st.file_uploader(
+    "上傳前月班表 Excel（第一欄為姓名，之後為各日班別）",
+    type=["xlsx"], key="prev_month_uploader",
+    disabled=st.session_state.step > 1
+)
+
+if _prev_file is not None and st.session_state.step == 1:
+    try:
+        _prev_xl = pd.read_excel(_prev_file, sheet_name=0, header=0)
+        _pnc = [c for c in _prev_xl.columns if "姓名" in str(c)]
+        if _pnc:
+            _prev_xl = _prev_xl.rename(columns={_pnc[0]: "姓名"})
+            _prev_xl["姓名"] = _prev_xl["姓名"].astype(str).str.strip()
+            # 自動偵測前月天數（欄位名稱為純數字者）
+            _prev_day_cols = sorted([c for c in _prev_xl.columns if str(c).isdigit()], key=lambda x: int(x))
+            _prev_md = max(int(c) for c in _prev_day_cols) if _prev_day_cols else 0
+            if _prev_md >= 13:
+                # 擷取最後 13 天（-13 ~ -1，以負索引代表前月日期）
+                _buf_cols = [str(d) for d in range(_prev_md - 12, _prev_md + 1)]
+                _buf = {}  # {姓名: {-13: 'D', -12: 'E', ..., -1: 'N'}}
+                for _, _pr in _prev_xl.iterrows():
+                    _pname = str(_pr["姓名"]).strip()
+                    if not _pname or _pname == "nan": continue
+                    _buf[_pname] = {}
+                    for _offset, _bc in enumerate(_buf_cols):
+                        _rel = _offset - 13  # -13, -12, ..., -1
+                        _v = str(_pr.get(_bc, "")).strip()
+                        _buf[_pname][_rel] = "" if _v in ("nan", "NaN", "", "休假", "例假", "國定") else _v
+                st.session_state.prev_month_buffer = _buf
+                st.success(f"✅ 前月班表解析成功，擷取最後 13 天（第 {_prev_md-12}~{_prev_md} 日）作為跨月緩衝")
+            else:
+                st.warning("前月班表天數不足，無法建立緩衝")
+        else:
+            st.error("找不到「姓名」欄")
+    except Exception as _pe:
+        st.error(f"前月班表解析失敗：{_pe}")
+elif st.session_state.get("prev_month_buffer"):
+    st.info(f"✅ 已載入前月班表緩衝（{len(st.session_state.prev_month_buffer)} 人）")
+
 if st.session_state.step == 1:
     if st.button("✅ 確認行事曆，進入下一步 (上傳名單與設定配額)", type="primary"):
         st.session_state.sel_year  = sel_year
@@ -1300,7 +1423,10 @@ if st.session_state.step == 1:
         st.session_state.nat_holidays_list = [int(x) for x in temp_nats]
         st.session_state.holiday_list = list(set(st.session_state.saturdays_list + st.session_state.sundays_list + st.session_state.nat_holidays_list))
         st.session_state.target_off = temp_target_off
-        
+        # 若使用者沒上傳前月班表，清除舊緩衝
+        if _prev_file is None:
+            st.session_state.prev_month_buffer = None
+
         default_quota_data = []
         for d in range(1, temp_month_days + 1):
             day_str = str(d)
@@ -4991,7 +5117,8 @@ if st.session_state.step >= 6:
 
         # ── 四周變形工時審查 ────────────────────────────────────
         per_week_df, violation_df = build_four_week_review(
-            st.session_state.final_sched, ai_df, month_days
+            st.session_state.final_sched, ai_df, month_days,
+            prev_buffer=st.session_state.get("prev_month_buffer")
         )
 
         tab1, tab2, tab3, tab4 = st.tabs([
