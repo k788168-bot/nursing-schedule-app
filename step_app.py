@@ -4241,30 +4241,18 @@ if st.session_state.step >= 5:
                     if not _swapped_h:
                         break
 
-            # 假日出勤均等池（均等化規則，與夜班均等池相同基準）：
-            # ‣ 排除：包班意願不為空、職稱為「組長」
-            # ‣ 納入：其餘具夜班資格且至少能上一種假日的人員
-            # ‣ 均等目標：假日出勤天數差距 ≤ 1
-            # 【注意】無任何假日出勤能力者即使有夜班資格也不納入，
-            #         避免無法出勤者拉低假日均等目標使全體假日上班數歸零
+            # ── 假日出勤均等化：單一大池，目標差距 ≤ 1 ─────────────────────────
+            # 納入：所有非行政職、非組長人員
+            #        且至少能上一種假日（週六/週日/國定其中一種）或有包班意願
+            # 排除：NO_HOL_ADMIN（護理長/副護理長/助理/傷兵）、組長
             _hol_elig_set = set(
                 i for i in ai_df.index
-                if cache_pref[i] == ""                                          # 排除包班人員
-                and cache_title[i] != "組長"                                    # 排除組長
-                and cache_night5[i] != ""                                       # 必須具夜班資格
-                and (cache_can_sat5[i] or cache_can_sun5[i] or cache_can_nat5[i])  # 至少能上一種假日
+                if cache_title[i] not in NO_HOL_ADMIN
+                and cache_title[i] != "組長"
+                and (cache_can_sat5[i] or cache_can_sun5[i] or cache_can_nat5[i]
+                     or cache_pref[i] != "")
             )
             _equalize_holiday_pool(_hol_elig_set)
-
-            # 包班池：依包班班別分組，同組包班人員互相均等
-            _pack_pref_groups: dict = {}
-            for _pi in ai_df.index:
-                _pp = cache_pref[_pi]
-                if _pp == "": continue
-                _ps = "N" if "大夜" in _pp else ("E" if "小夜" in _pp else ("12-8" if "中" in _pp else "D"))
-                _pack_pref_groups.setdefault(_ps, set()).add(_pi)
-            for _pg_set in _pack_pref_groups.values():
-                _equalize_holiday_pool(_pg_set)
 
             # ── 班數達標檢查：收集未完美符合 personal_targets 的警示 ──
             _target_warnings5 = []
