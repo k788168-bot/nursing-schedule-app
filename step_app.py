@@ -2174,13 +2174,6 @@ if st.session_state.step >= 3:
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
                                     # 公平分配上限：Stage 2 同樣最多到 PACK_MIN_SHIFTS（15班）
                                     if sum(1 for v in sched[idx] if v == pref_s) >= PACK_MIN_SHIFTS: continue
-                                    # ── 假日包班班次個人上限：避免假日出勤集中在少數人 ──
-                                    # 上限 = ceil(max_target × 假日比例)，最多不超過半數假日
-                                    _hol_set3 = set(sat_list3) | set(sun_list3) | set(nat_list3)
-                                    _hol_ratio3 = len(_hol_set3) / max(month_days, 1)
-                                    _hol_cap3 = max(2, round(max_target3[idx] * _hol_ratio3))
-                                    _hol_worked3 = sum(1 for hd in _hol_set3 if sched[idx][hd] == pref_s)
-                                    if _hol_worked3 >= _hol_cap3: continue  # 已達假日上限，跳過
                                     if en_quota_full3(pref_s, d_int): break  # 此假日 E/N 額已滿
                                     if can_work_base(idx, pref_s, d_int) and group_cap_ok(idx, pref_s, d_int, sched, cache_group3):
                                         sched[idx][d_int] = pref_s
@@ -2195,13 +2188,16 @@ if st.session_state.step >= 3:
                                 group3 = [i for i in pack_indices3 if get_pref_s(cache_pref[i]) == pref_s]
                                 if not group3: continue
                                 _hol_set_s3 = set(sat_list3) | set(sun_list3) | set(nat_list3)
+                                _is_hol_d3 = d_int in _hol_set_s3
                                 group3_sorted = sorted(group3, key=lambda i: (
-                                    sum(1 for v in sched[i] if is_work(v)),                               # 總出勤最少者優先
-                                    sum(1 for hd in _hol_set_s3 if is_work(sched[i][hd])),               # 假日出勤最少者次之
-                                    sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 達標比例最低者再優先
+                                    # 假日天：假日出勤最少者最優先；平日天：總出勤最少者最優先
+                                    sum(1 for hd in _hol_set_s3 if is_work(sched[i][hd])) if _is_hol_d3
+                                    else sum(1 for v in sched[i] if is_work(v)),
+                                    sum(1 for v in sched[i] if is_work(v)),                               # 次排：總出勤
+                                    sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 再排：達標比例
                                 ))
                                 _day_placed3 = 0   # 本日已排入人數
-                                _day_limit3 = max(1, len(group3) // 2)  # 每日最多排入半數人員
+                                _day_limit3 = max(1, len(group3) - 1)  # 每日最多排入 len-1 人（減少碎片化）
                                 for idx in group3_sorted:
                                     if _day_placed3 >= _day_limit3: break  # 本日已達上限，讓位給其他人
                                     if sum(1 for v in sched[idx] if is_work(v)) >= max_target3[idx]: continue
@@ -5238,6 +5234,18 @@ if st.session_state.step >= 6:
         per_week_df, violation_df = build_four_week_review(
             st.session_state.final_sched, ai_df, month_days,
             prev_buffer=st.session_state.get("prev_month_buffer")
+        )
+
+        # ── 提前產出 Excel（在 tab1 修改 final_sched 之前，確保班表與統計來自同一份資料）──
+        _export_sched6 = apply_prewhite_dx(st.session_state.final_sched.copy(), ai_df, month_days)
+        output = build_colored_excel(
+            _export_sched6,
+            stats_df,
+            st.session_state.explanation_df,
+            shortages_export,
+            month_days,
+            per_week_df=per_week_df,
+            violation_df=violation_df
         )
 
         tab1, tab2, tab3, tab4 = st.tabs([
