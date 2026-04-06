@@ -1317,6 +1317,54 @@ st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.s
 
 weekday_names_list = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
+# ═══════════════════════════════════════════════════════════════════
+# 🔒 前置步驟：前月班表上傳（上傳後即鎖定，不可替換；如需重置請重新整理頁面）
+# ═══════════════════════════════════════════════════════════════════
+st.write("#### 🔗 前月班表（選填）｜用於跨月連五 / 14日窗口 / 8週變形工時審查")
+st.caption("上傳上個月的最終班表 Excel，系統會擷取最後 13 天的班別做為本月排班的接軌緩衝，審查時自動偵測跨月違規。若不上傳則僅審查本月內的合法性。上傳成功後將鎖定，如需重新上傳請重新整理頁面。")
+
+_prev_locked = st.session_state.get("prev_month_buffer") is not None
+
+_prev_file = st.file_uploader(
+    "上傳前月班表 Excel（第一欄為姓名，之後為各日班別）",
+    type=["xlsx"], key="prev_month_uploader",
+    disabled=_prev_locked
+)
+
+if _prev_locked:
+    st.success(f"🔒 前月班表已鎖定（{len(st.session_state.prev_month_buffer)} 人）｜如需重新上傳請重新整理頁面")
+elif _prev_file is not None:
+    try:
+        _prev_xl = pd.read_excel(_prev_file, sheet_name=0, header=0)
+        _pnc = [c for c in _prev_xl.columns if "姓名" in str(c)]
+        if _pnc:
+            _prev_xl = _prev_xl.rename(columns={_pnc[0]: "姓名"})
+            _prev_xl["姓名"] = _prev_xl["姓名"].astype(str).str.strip()
+            _prev_day_cols = sorted([c for c in _prev_xl.columns if str(c).isdigit()], key=lambda x: int(x))
+            _prev_md = max(int(c) for c in _prev_day_cols) if _prev_day_cols else 0
+            if _prev_md >= 13:
+                _buf_cols = [str(d) for d in range(_prev_md - 12, _prev_md + 1)]
+                _buf = {}
+                for _, _pr in _prev_xl.iterrows():
+                    _pname = str(_pr["姓名"]).strip()
+                    if not _pname or _pname == "nan": continue
+                    _buf[_pname] = {}
+                    for _offset, _bc in enumerate(_buf_cols):
+                        _rel = _offset - 13
+                        _v = str(_pr.get(_bc, "")).strip()
+                        _buf[_pname][_rel] = "" if _v in ("nan", "NaN", "", "休假", "例假", "國定") else _v
+                st.session_state.prev_month_buffer = _buf
+                st.success(f"✅ 前月班表解析成功，擷取最後 13 天（第 {_prev_md-12}~{_prev_md} 日）作為跨月緩衝，上傳已鎖定")
+                st.rerun()
+            else:
+                st.warning("前月班表天數不足，無法建立緩衝")
+        else:
+            st.error("找不到「姓名」欄")
+    except Exception as _pe:
+        st.error(f"前月班表解析失敗：{_pe}")
+
+st.divider()
+
 # ==========================================
 # 📍 第一步：行事曆設定（預設帶入下個月）
 # ==========================================
@@ -1370,48 +1418,6 @@ with col_sun:
 with col_nat:
     temp_nats = st.multiselect("國定假日日期", [str(i) for i in range(1, temp_month_days + 1)], default=[str(d) for d in pure_nat_holidays], disabled=st.session_state.step > 1)
 
-st.write("#### 🔗 前月班表（選填）｜用於跨月連五 / 14日窗口 / 8週變形工時審查")
-st.caption("上傳上個月的最終班表 Excel，系統會擷取最後 13 天的班別做為本月排班的接軌緩衝，審查時自動偵測跨月違規。若不上傳則僅審查本月內的合法性。")
-
-_prev_file = st.file_uploader(
-    "上傳前月班表 Excel（第一欄為姓名，之後為各日班別）",
-    type=["xlsx"], key="prev_month_uploader",
-    disabled=st.session_state.step > 1
-)
-
-if _prev_file is not None and st.session_state.step == 1:
-    try:
-        _prev_xl = pd.read_excel(_prev_file, sheet_name=0, header=0)
-        _pnc = [c for c in _prev_xl.columns if "姓名" in str(c)]
-        if _pnc:
-            _prev_xl = _prev_xl.rename(columns={_pnc[0]: "姓名"})
-            _prev_xl["姓名"] = _prev_xl["姓名"].astype(str).str.strip()
-            # 自動偵測前月天數（欄位名稱為純數字者）
-            _prev_day_cols = sorted([c for c in _prev_xl.columns if str(c).isdigit()], key=lambda x: int(x))
-            _prev_md = max(int(c) for c in _prev_day_cols) if _prev_day_cols else 0
-            if _prev_md >= 13:
-                # 擷取最後 13 天（-13 ~ -1，以負索引代表前月日期）
-                _buf_cols = [str(d) for d in range(_prev_md - 12, _prev_md + 1)]
-                _buf = {}  # {姓名: {-13: 'D', -12: 'E', ..., -1: 'N'}}
-                for _, _pr in _prev_xl.iterrows():
-                    _pname = str(_pr["姓名"]).strip()
-                    if not _pname or _pname == "nan": continue
-                    _buf[_pname] = {}
-                    for _offset, _bc in enumerate(_buf_cols):
-                        _rel = _offset - 13  # -13, -12, ..., -1
-                        _v = str(_pr.get(_bc, "")).strip()
-                        _buf[_pname][_rel] = "" if _v in ("nan", "NaN", "", "休假", "例假", "國定") else _v
-                st.session_state.prev_month_buffer = _buf
-                st.success(f"✅ 前月班表解析成功，擷取最後 13 天（第 {_prev_md-12}~{_prev_md} 日）作為跨月緩衝")
-            else:
-                st.warning("前月班表天數不足，無法建立緩衝")
-        else:
-            st.error("找不到「姓名」欄")
-    except Exception as _pe:
-        st.error(f"前月班表解析失敗：{_pe}")
-elif st.session_state.get("prev_month_buffer"):
-    st.info(f"✅ 已載入前月班表緩衝（{len(st.session_state.prev_month_buffer)} 人）")
-
 if st.session_state.step == 1:
     if st.button("✅ 確認行事曆，進入下一步 (上傳名單與設定配額)", type="primary"):
         st.session_state.sel_year  = sel_year
@@ -1423,9 +1429,6 @@ if st.session_state.step == 1:
         st.session_state.nat_holidays_list = [int(x) for x in temp_nats]
         st.session_state.holiday_list = list(set(st.session_state.saturdays_list + st.session_state.sundays_list + st.session_state.nat_holidays_list))
         st.session_state.target_off = temp_target_off
-        # 若使用者沒上傳前月班表，清除舊緩衝
-        if _prev_file is None:
-            st.session_state.prev_month_buffer = None
 
         default_quota_data = []
         for d in range(1, temp_month_days + 1):
@@ -2646,10 +2649,16 @@ if st.session_state.step >= 4:
                                     def evaluate_nurse(idx):
                                         night_worked = sum(1 for v in sched[idx] if v in ["E", "N", "12-8"])
                                         score = 0
-
-                                        if night_worked < target_night: score += 3000000
-                                        elif night_worked == target_night: score += 1000000
-                                        else: score -= (night_worked * 1000000)
+                                        # ── 個人化缺口比例加分（取代固定 target_night 比較）──────────────
+                                        # 計算此人目前剩餘的可用空格數（空格 = 可能排夜班的位置）
+                                        # 比例 = 已拿夜班 / 可用空格，比例越低代表「相對夜班不足」→ 越優先
+                                        _avail4 = sum(
+                                            1 for _d4 in range(1, month_days + 1)
+                                            if sched[idx][_d4] == ""
+                                        )
+                                        _ratio4 = night_worked / max(_avail4, 1)
+                                        # 比例從 0（夜班最少/空格最多）到 1（全排滿），加分從 500萬 遞減到 0
+                                        score += int((1.0 - _ratio4) * 5_000_000)
 
                                         # ── 連班型態感知：避免上一休一 ──
                                         _y4 = sched[idx][d_int - 1] if d_int > 1 else ""
