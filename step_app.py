@@ -3099,17 +3099,23 @@ if st.session_state.step >= 4:
                                         else:
                                             score -= 3_000_000   # 緩衝日浪費1個工作日空格，懲罰
 
-                                        # ── Block Preference：同班別連排加分 + 異種夜班相鄰懲罰 ──
-                                        # 同班別連排：N-N / E-E / 12-8-12-8，夜班集中同週減少跨類型污染
-                                        _prev_b4 = sched[idx][d_int - 1] if d_int > 1 else ""
-                                        _next_b4 = sched[idx][d_int + 1] if d_int < month_days else ""
-                                        if _prev_b4 == s_type or _next_b4 == s_type:
-                                            score += 3_000_000   # 同班別連排，強力鼓勵
-                                        # 異種夜班相鄰懲罰：防止 N+E / E+12-8 黏在一起污染同一週
+                                        # ── Block Preference：同班別聚類加分（跳過緩衝日）+ 異種夜班懲罰 ──
+                                        # N 班後有強制緩衝日，直接看前後各 2 格才能偵測到 N-N 連排
+                                        _prev1_b4 = sched[idx][d_int - 1] if d_int > 1 else ""
+                                        _prev2_b4 = sched[idx][d_int - 2] if d_int > 2 else ""
+                                        _next1_b4 = sched[idx][d_int + 1] if d_int < month_days else ""
+                                        _next2_b4 = sched[idx][d_int + 2] if d_int + 2 <= month_days else ""
+                                        _block_direct = (_prev1_b4 == s_type or _next1_b4 == s_type)
+                                        _block_skip   = (_prev2_b4 == s_type or _next2_b4 == s_type)
+                                        if _block_direct:
+                                            score += 4_000_000   # 直接相鄰同班別（E/12-8 連排）：最優
+                                        elif _block_skip:
+                                            score += 3_000_000   # 跳過緩衝日的同班別（N-N 連排模式）
+                                        # 異種夜班相鄰懲罰（前後各 2 格內有不同夜班類型）
                                         _night_types4 = ("E", "N", "12-8")
-                                        if (_prev_b4 in _night_types4 and _prev_b4 != s_type) or \
-                                           (_next_b4 in _night_types4 and _next_b4 != s_type):
-                                            score -= 2_500_000   # 異種夜班相鄰，懲罰
+                                        _near4 = [_prev1_b4, _prev2_b4, _next1_b4, _next2_b4]
+                                        if any(v in _night_types4 and v != s_type for v in _near4):
+                                            score -= 2_500_000   # 異種夜班出現在前後 2 格，懲罰
 
                                         # ── 剩餘容量預判：排入此夜班後，後續有效空格能否補滿應上班天數 ──
                                         # 保守估計：夜班後至少損失 1 個強制緩衝日，有效空格再減 1
