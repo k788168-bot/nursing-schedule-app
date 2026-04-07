@@ -3007,7 +3007,10 @@ if st.session_state.step >= 4:
                                 if curr_d == d_int: continue
                                 if is_work(_xmonth_shift(n_idx, curr_d, sched, ai_df, month_days)): worked_in_window += 1
                             if worked_in_window + 1 > 12: return False
-                        if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days): return False
+                        if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days):
+                            _week_snap = {dd: sched[n_idx][dd] for dd in range(max(1, d_int - 6), min(month_days, d_int + 6) + 1)}
+                            print(f"[DEBUG week_variety] n_idx={n_idx} s={s} d={d_int} snap={_week_snap}")
+                            return False
                         return True
 
                     elig_night_nurses = [i for i in ai_df.index if cache_pref[i] == "" and cache_night[i] in ("大夜", "小夜") and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
@@ -3061,6 +3064,14 @@ if st.session_state.step >= 4:
                                     available = [i for i in ai_df.index if can_work_base(i, s_type, d_int, strict_wow=pass_num)]
                                     available = [i for i in available if cache_pref[i] == ""]
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
+                                    if pass_num:
+                                        available = [i for i in available
+                                                     if week_variety_ok(sched, i, s_type, d_int,
+                                                                        st.session_state.first_wday, month_days)]
+                                    if not pass_num:
+                                        available = [i for i in available
+                                                     if week_variety_ok(sched, i, s_type, d_int,
+                                                                        st.session_state.first_wday, month_days)]
                                     if not available: continue
 
                                     # ── 最小塊優先：塊期內的護師直接插入，不參與競爭 ──
@@ -4243,7 +4254,7 @@ if st.session_state.step >= 5:
                     # 假日：嚴格遵守配額上限；平日：允許超出配額最多 3 人的緩衝
                     _row_q_p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                     _is_hol_p2 = d_int in _hol_set_f5
-                    _D_WEEKDAY_BUFFER_P2 = 3  # 平日D班每日最多允許超出配額的人數緩衝
+                    _D_WEEKDAY_BUFFER_P2 = 5  # 平日D班每日最多允許超出配額的人數緩衝
                     if not _row_q_p2.empty:
                         try:
                             if eff_sf == "D":
@@ -4298,7 +4309,7 @@ if st.session_state.step >= 5:
                                 if d_int in _hol_set_f5:
                                     if _cq >= _rq: continue
                                 else:
-                                    if _cq >= _rq + 3: continue
+                                    if _cq >= _rq + 5: continue  # 平日允許超出最多5人
                             elif eff_2b == "12-8":
                                 if sum(1 for i in ai_df.index if sched[i][d_int] == "12-8") >= int(_rowq_2b.iloc[0]["12-8"]): continue
                         except (KeyError, ValueError): pass
