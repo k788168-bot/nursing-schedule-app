@@ -5108,7 +5108,7 @@ if st.session_state.step >= 6:
                         # 夜班資格對應班別限制
                         _night6q = cache_night6[n_idx]
                         if _s2 == "N" and _night6q not in ("大夜",): continue
-                        if _s2 == "E" and _night6q not in ("小夜",): continue
+                        if _s2 == "E" and _night6q not in ("小夜", "大夜"): continue
                         if _s2 == "12-8" and _night6q not in ("大夜", "小夜", "中班"): continue
                         # 每日配額上限
                         _row_q6p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
@@ -5621,8 +5621,8 @@ if st.session_state.step >= 6:
             night_count   = s_vals.count("E") + s_vals.count("N") + s_vals.count("12-8")
             holiday_count = 0 if is_no_hol else sum(1 for d_chk in range(1, month_days + 1) if (d_chk in holiday_days_list) and is_work(s_vals[d_chk-1]))
 
-            ot_history_s   = st.session_state.ot_history
-            ot_days_count_s= st.session_state.ot_days_count
+            ot_history_s   = st.session_state.get("ot_history", {})
+            ot_days_count_s= st.session_state.get("ot_days_count", {})
             avg_ot_line    = round(sum(ot_history_s[idx]) / len(ot_history_s[idx]), 1) if ot_history_s[idx] else "-"
             worked_count   = sum(1 for v in s_vals if is_work(v))
             target         = personal_targets[idx]
