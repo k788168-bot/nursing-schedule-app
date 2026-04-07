@@ -1272,6 +1272,148 @@ with st.sidebar:
                     if "🚨" in " ".join(_viol_df["合法判斷"].tolist() if "合法判斷" in _viol_df.columns else []):
                         st.error("發現勞基法違規")
                     st.dataframe(_viol_df, use_container_width=True)
+                # ── ⚖️ 公平性結算 ──────────────────────────────────────────
+                with st.expander("⚖️ 公平性結算", expanded=False):
+                    _vhol_set = set(st.session_state.get("holiday_list", []))
+                    _illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
+                    _v_stats = []
+                    for _vi, _vr in _ai.iterrows():
+                        _vname2 = str(_vr["姓名"]).strip()
+                        _vtitle = str(_vr.get("職稱", "")).strip()
+                        _vis_no_hol = _vtitle in NO_HOL_SET
+                        _vrow_al = _val_aligned[_val_aligned["姓名"] == _vname2]
+                        if _vrow_al.empty: continue
+                        _vs = {d: str(_vrow_al.iloc[0].get(str(d), "")).strip() for d in range(1, _md + 1)}
+                        _v_worked = sum(1 for v in _vs.values() if is_work(v))
+                        _v_hol = 0 if _vis_no_hol else sum(1 for d, v in _vs.items() if d in _vhol_set and is_work(v))
+                        _v_night = sum(1 for v in _vs.values() if v in ("E", "N", "12-8") or v in ("E★", "N★"))
+                        # 目標天數
+                        _vpt = st.session_state.get("personal_targets", {}).get(_vi, _md - 10)
+                        _vstatus = "✅ 達標" if _v_worked == _vpt else (f"⚠️ 欠班 {_vpt - _v_worked} 天" if _v_worked < _vpt else f"🟢 超班 {_v_worked - _vpt} 天")
+                        _v_stats.append({
+                            "姓名": _vname2, "職稱": _vtitle,
+                            "目標": _vpt, "實際": _v_worked, "狀態": _vstatus,
+                            "假日出勤": "-" if _vis_no_hol else _v_hol,
+                            "夜班數": "-" if _vis_no_hol else _v_night,
+                        })
+                    if _v_stats:
+                        st.dataframe(pd.DataFrame(_v_stats), use_container_width=True, hide_index=True)
+                # ── 🌸 假日出勤分布 ────────────────────────────────────────
+                with st.expander("🌸 假日出勤分布", expanded=False):
+                    _vhol_set2 = set(st.session_state.get("holiday_list", []))
+                    _hol_dist = []
+                    for _vi, _vr in _ai.iterrows():
+                        _vname3 = str(_vr["姓名"]).strip()
+                        _vtitle3 = str(_vr.get("職稱", "")).strip()
+                        if _vtitle3 in NO_HOL_ADMIN: continue
+                        _vrow_al3 = _val_aligned[_val_aligned["姓名"] == _vname3]
+                        if _vrow_al3.empty: continue
+                        _vs3 = {d: str(_vrow_al3.iloc[0].get(str(d), "")).strip() for d in range(1, _md + 1)}
+                        _vh3 = sum(1 for d, v in _vs3.items() if d in _vhol_set2 and is_work(v))
+                        _hol_dist.append({"姓名": _vname3, "假日出勤": _vh3})
+                    if _hol_dist:
+                        _hol_df3 = pd.DataFrame(_hol_dist).sort_values("假日出勤", ascending=False).reset_index(drop=True)
+                        _h_max3 = _hol_df3["假日出勤"].max()
+                        _h_min3 = _hol_df3["假日出勤"].min()
+                        _h_diff3 = _h_max3 - _h_min3
+                        _msg3 = f"最多 {_h_max3} 天 / 最少 {_h_min3} 天 / 差距 {_h_diff3} 天"
+                        if _h_diff3 <= 1:
+                            st.success(f"✅ 假日出勤均衡：{_msg3}")
+                        elif _h_diff3 <= 3:
+                            st.warning(f"⚠️ 假日出勤略不均：{_msg3}")
+                        else:
+                            st.error(f"🚨 假日出勤差距過大：{_msg3}")
+                        st.dataframe(_hol_df3, use_container_width=True, hide_index=True)
+                # ── 🌙 week_variety 違規掃描 ──────────────────────────────
+                with st.expander("🌙 週多樣性（花花班）掃描", expanded=False):
+                    _first_wd_v = st.session_state.get("first_wday", 0)
+                    _wv_violations = []
+                    for _vi, _vr in _ai.iterrows():
+                        _vname4 = str(_vr["姓名"]).strip()
+                        _vrow_al4 = _val_aligned[_val_aligned["姓名"] == _vname4]
+                        if _vrow_al4.empty: continue
+                        _vs4 = {d: str(_vrow_al4.iloc[0].get(str(d), "")).strip() for d in range(1, _md + 1)}
+                        _checked4 = set()
+                        for _d4 in range(1, _md + 1):
+                            _wd4 = (_first_wd_v + _d4 - 1) % 7
+                            _dsun4 = (_wd4 + 1) % 7
+                            _ws4 = max(1, _d4 - _dsun4)
+                            if _ws4 in _checked4: continue
+                            _checked4.add(_ws4)
+                            _we4 = min(_md, _ws4 + 6)
+                            _wtypes4 = set()
+                            for _dd4 in range(_ws4, _we4 + 1):
+                                _v4 = _vs4.get(_dd4, "")
+                                _vu4 = _v4.upper()
+                                if _vu4 in ("D","公") or (_vu4.startswith("D") and _vu4 not in ("DX","")): _wtypes4.add("D")
+                                elif _vu4 in ("E","E★","E*"): _wtypes4.add("E")
+                                elif _vu4 in ("N","N★","N*"): _wtypes4.add("N")
+                                elif _vu4 == "12-8": _wtypes4.add("12-8")
+                            if len(_wtypes4) >= 3:
+                                _week_vals4 = [_vs4.get(_dd4, "休") for _dd4 in range(_ws4, _we4 + 1)]
+                                _wv_violations.append({
+                                    "姓名": _vname4,
+                                    "週次": f"第{_ws4}~{_we4}日",
+                                    "班別種類": " / ".join(sorted(_wtypes4)),
+                                    "班表": " ".join(_week_vals4),
+                                })
+                    if _wv_violations:
+                        st.error(f"🚨 共 {len(_wv_violations)} 人次出現一週三種班別（違反院內 week_variety 規定）")
+                        st.dataframe(pd.DataFrame(_wv_violations), use_container_width=True, hide_index=True)
+                    else:
+                        st.success("✅ 全體人員週多樣性符合規定（每週最多 2 種班別）")
+                # ── 📋 欠班清單 ────────────────────────────────────────────
+                with st.expander("📋 欠班清單", expanded=False):
+                    _deficit_list5 = []
+                    _vpts5 = st.session_state.get("personal_targets", {})
+                    for _vi5, _vr5 in _ai.iterrows():
+                        _vname5 = str(_vr5["姓名"]).strip()
+                        _vrow5 = _val_aligned[_val_aligned["姓名"] == _vname5]
+                        if _vrow5.empty: continue
+                        _vs5 = {d: str(_vrow5.iloc[0].get(str(d), "")).strip() for d in range(1, _md + 1)}
+                        _vw5 = sum(1 for v in _vs5.values() if is_work(v))
+                        _vt5 = _vpts5.get(_vi5, _md - 10)
+                        if _vw5 < _vt5:
+                            _deficit_list5.append({"姓名": _vname5, "目標": _vt5, "實際": _vw5, "欠班天數": _vt5 - _vw5})
+                    if _deficit_list5:
+                        st.warning(f"⚠️ 共 {len(_deficit_list5)} 人欠班")
+                        st.dataframe(pd.DataFrame(_deficit_list5).sort_values("欠班天數", ascending=False), use_container_width=True, hide_index=True)
+                    else:
+                        st.success("✅ 所有人員均達到目標出勤天數")
+                # ── 🔗 §34 班別接續違規掃描 ───────────────────────────────
+                with st.expander("🔗 §34 班別接續違規（換班間距）", expanded=False):
+                    _illegal_next6 = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
+                    _seq_viols6 = []
+                    for _vi6, _vr6 in _ai.iterrows():
+                        _vname6 = str(_vr6["姓名"]).strip()
+                        _vrow6 = _val_aligned[_val_aligned["姓名"] == _vname6]
+                        if _vrow6.empty: continue
+                        _vs6 = {d: str(_vrow6.iloc[0].get(str(d), "")).strip() for d in range(1, _md + 1)}
+                        for _d6 in range(1, _md):
+                            _v6a = _vs6.get(_d6, "")
+                            _v6b = _vs6.get(_d6 + 1, "")
+                            # 正規化
+                            def _norm6(v):
+                                vu = v.upper()
+                                if vu in ("D","公") or (vu.startswith("D") and vu not in ("DX","")): return "D"
+                                if vu in ("E","E★","E*"): return "E"
+                                if vu in ("N","N★","N*"): return "N"
+                                if vu == "12-8": return "12-8"
+                                return None
+                            _t6a = _norm6(_v6a)
+                            _t6b = _norm6(_v6b)
+                            if _t6a and _t6b and _t6b in _illegal_next6.get(_t6a, []):
+                                _seq_viols6.append({
+                                    "姓名": _vname6,
+                                    "日期": f"第{_d6}→{_d6+1}日",
+                                    "班別接續": f"{_v6a} → {_v6b}",
+                                    "違規原因": f"{_t6a}→{_t6b}（§34 換班間距不足 11h）",
+                                })
+                    if _seq_viols6:
+                        st.error(f"🚨 共 {len(_seq_viols6)} 處班別接續違規")
+                        st.dataframe(pd.DataFrame(_seq_viols6), use_container_width=True, hide_index=True)
+                    else:
+                        st.success("✅ 全月無班別接續違規（§34 換班間距符合規定）")
         except Exception as _e:
             st.error(f"解析失敗：{_e}，請確認上傳的班表格式與系統輸出的 Excel 格式一致")
     elif _val_file and st.session_state.get("ai_df") is None:
@@ -1289,28 +1431,45 @@ with st.sidebar:
             _sat_ot = st.session_state.saturdays_list
             _sun_ot = st.session_state.sundays_list
             _nat_ot = st.session_state.nat_holidays_list
-            # 讀取上傳班表
-            _ot_xl = pd.read_excel(_ot_file, sheet_name=0, header=0)
-            _nm_col = [c for c in _ot_xl.columns if "姓名" in str(c)]
-            if not _nm_col:
+            # 讀取上傳班表（支援系統輸出格式 及 外部多列標題格式）
+            _ot_xl_raw = pd.read_excel(_ot_file, sheet_name=0, header=None)
+            # 自動偵測 header 行（找含「姓名」的第一行）
+            _ot_hdr_idx = None
+            for _ri in range(min(5, len(_ot_xl_raw))):
+                _rv = [str(v).strip() for v in _ot_xl_raw.iloc[_ri].values]
+                if "姓名" in _rv:
+                    _ot_hdr_idx = _ri; break
+            if _ot_hdr_idx is None:
                 st.error("找不到「姓名」欄，請確認格式正確")
                 st.stop()
-            _ot_xl = _ot_xl.rename(columns={_nm_col[0]: "姓名"})
-            _ot_xl["姓名"] = _ot_xl["姓名"].astype(str).str.strip()
+            _ot_hdr = [str(v).strip() for v in _ot_xl_raw.iloc[_ot_hdr_idx].values]
+            _ot_name_ci = _ot_hdr.index("姓名")
+            # 解析日期欄（支援跨月格式：前月尾+本月）
+            _ot_date_cols = []
+            for _ci, _cv in enumerate(_ot_hdr):
+                try: _ot_date_cols.append((_ci, int(float(_cv))))
+                except: pass
+            _ot_dates = [d for _, d in _ot_date_cols]
+            _ot_split = next((i for i in range(1, len(_ot_dates)) if _ot_dates[i] < _ot_dates[i-1] and _ot_dates[i] <= 5), None)
+            _ot_this_month = _ot_date_cols[_ot_split:] if _ot_split else _ot_date_cols
+            _ot_this_month = [(ci, d) for ci, d in _ot_this_month if 1 <= d <= _md_ot]
+            _ot_ci_to_day = {ci: d for ci, d in _ot_this_month}
             # 對齊姓名索引
             _day_cols_ot = [str(d) for d in range(1, _md_ot + 1)]
             _ai_names_ot = _ai_ot["姓名"].str.strip().tolist()
             _ot_aligned = _ai_ot[["姓名"]].copy().reset_index(drop=True)
             for _dc in _day_cols_ot:
                 _ot_aligned[_dc] = ""
-            for _, _vrow in _ot_xl.iterrows():
-                _vname = str(_vrow["姓名"]).strip()
-                if _vname in _ai_names_ot:
-                    _ridx = _ai_names_ot.index(_vname)
-                    for _dc in _day_cols_ot:
-                        if _dc in _vrow.index:
-                            _v = str(_vrow[_dc]).strip()
-                            _ot_aligned.at[_ridx, _dc] = "" if _v in ("nan", "NaN", "") else _v
+            for _ri in range(_ot_hdr_idx + 1, len(_ot_xl_raw)):
+                _vname = str(_ot_xl_raw.iloc[_ri, _ot_name_ci]).strip()
+                if not _vname or _vname in ("nan", "NaN", "None", "姓名"): continue
+                try: float(_vname); continue
+                except: pass
+                if _vname not in _ai_names_ot: continue
+                _ridx = _ai_names_ot.index(_vname)
+                for _ci, _d in _ot_ci_to_day.items():
+                    _v = str(_ot_xl_raw.iloc[_ri, _ci]).strip()
+                    _ot_aligned.at[_ridx, str(_d)] = "" if _v in ("nan", "NaN", "", "V") else _v
             # 建立 sched dict（index 為 ai_df index）
             _sched_ot = {}
             for _i in _ai_ot.index:
