@@ -3098,28 +3098,19 @@ if st.session_state.step >= 4:
                                         else:
                                             score -= 3_000_000   # 緩衝日浪費1個工作日空格，懲罰
 
-                                        # ── Block Preference：同班別聚類加分（跳過緩衝日）+ 馬太效應防護 ──
-                                        # 防護條件：此人的夜班數 ≤ 全組可排夜班人員的平均夜班數 × 1.2
-                                        # 確保夜班集中連排的同時，不讓少數人壟斷所有夜班大塊
+                                        # ── Block Preference：同班別聚類加分（跳過緩衝日）+ 異種夜班懲罰 ──
+                                        # N 班後有強制緩衝日，直接看前後各 2 格才能偵測到 N-N 連排
                                         _night_types4 = ("E", "N", "12-8")
-                                        _elig4 = [i for i in ai_df.index
-                                                  if cache_pref[i] == "" and cache_night.get(i, "") != ""
-                                                  and not cache_preg.get(i, False)]
-                                        _avg_night4 = (sum(sum(1 for v in sched[i] if v in _night_types4) for i in _elig4)
-                                                       / max(len(_elig4), 1))
-                                        _my_night4 = sum(1 for v in sched[idx] if v in _night_types4)
-                                        _block_allowed = (_my_night4 <= _avg_night4 * 1.2)
                                         _prev1_b4 = sched[idx][d_int - 1] if d_int > 1 else ""
                                         _prev2_b4 = sched[idx][d_int - 2] if d_int > 2 else ""
                                         _next1_b4 = sched[idx][d_int + 1] if d_int < month_days else ""
                                         _next2_b4 = sched[idx][d_int + 2] if d_int + 2 <= month_days else ""
                                         _block_direct = (_prev1_b4 == s_type or _next1_b4 == s_type)
                                         _block_skip   = (_prev2_b4 == s_type or _next2_b4 == s_type)
-                                        if _block_allowed:
-                                            if _block_direct:
-                                                score += 4_000_000   # 直接相鄰同班別（E/12-8 連排）：最優
-                                            elif _block_skip:
-                                                score += 3_000_000   # 跳過緩衝日的同班別（N-N 連排模式）
+                                        if _block_direct:
+                                            score += 4_000_000   # 直接相鄰同班別（E/12-8 連排）：最優
+                                        elif _block_skip:
+                                            score += 3_000_000   # 跳過緩衝日的同班別（N-N 連排模式）
                                         # 異種夜班相鄰懲罰（前後各 2 格內有不同夜班類型）
                                         _near4 = [_prev1_b4, _prev2_b4, _next1_b4, _next2_b4]
                                         if any(v in _night_types4 and v != s_type for v in _near4):
@@ -4250,20 +4241,6 @@ if st.session_state.step >= 5:
                     return 2
                 for d_int in sorted(range(1, month_days + 1), key=_pat_2b):
                     if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: break
-                    # ── 孤立空格預識別：兩側連班達4天以上，補入D班後必觸發連五封鎖，直接跳過 ──
-                    # 避免浪費嘗試次數在永遠補不進去的位置
-                    if sched[n_idx][d_int] not in ("", "上課"):
-                        continue
-                    _iso_left = 0
-                    for _bd_iso in range(d_int - 1, 0, -1):
-                        if is_work(sched[n_idx][_bd_iso]): _iso_left += 1
-                        else: break
-                    _iso_right = 0
-                    for _fd_iso in range(d_int + 1, month_days + 1):
-                        if is_work(sched[n_idx][_fd_iso]): _iso_right += 1
-                        else: break
-                    if _iso_left + 1 + _iso_right > 5:
-                        continue  # 排入後連班超過5天，連五封鎖，跳過
                     eff_2b = f_s_2b
                     if _pref_2b and f_s_2b in ("E", "N"):
                         _row_2b = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
