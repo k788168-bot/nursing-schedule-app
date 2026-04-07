@@ -3064,9 +3064,10 @@ if st.session_state.step >= 4:
                                     available = [i for i in ai_df.index if can_work_base(i, s_type, d_int, strict_wow=pass_num)]
                                     available = [i for i in available if cache_pref[i] == ""]
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
-                                    available = [i for i in available
-                                                 if week_variety_ok(sched, i, s_type, d_int,
-                                                                    st.session_state.first_wday, month_days)]
+                                    if not pass_num:
+                                        available = [i for i in available
+                                                     if week_variety_ok(sched, i, s_type, d_int,
+                                                                        st.session_state.first_wday, month_days)]
                                     if not available: continue
 
                                     # ── 最小塊優先：塊期內的護師直接插入，不參與競爭 ──
@@ -4281,6 +4282,7 @@ if st.session_state.step >= 5:
             # ── 補足 Pass 2b：放寬週多樣性，再嘗試補足仍欠班人員 ──────────────────────
             for n_idx in sorted(ai_df.index, key=lambda i: sum(1 for v in sched[i] if is_work(v)) - personal_targets[i]):
                 if sum(1 for v in sched[n_idx] if is_work(v)) >= personal_targets[n_idx]: continue
+                if sum(1 for v in sched[n_idx] if is_work(v)) > personal_targets[n_idx]: continue
                 _pref_2b = cache_pref[n_idx]
                 f_s_2b = ("N" if "大夜" in _pref_2b else ("E" if "小夜" in _pref_2b else ("12-8" if "中" in _pref_2b else "D"))) if _pref_2b else "D"
                 def _pat_2b(d):
@@ -4565,6 +4567,8 @@ if st.session_state.step >= 5:
                 if sc > 5: return False
                 if not can_work_holiday_check(n_idx, d_int, cache_can_sat5, cache_can_sun5,
                                               cache_can_nat5, sat_list5, sun_list5, nat_list5):
+                    return False
+                if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days):
                     return False
                 return True
 
