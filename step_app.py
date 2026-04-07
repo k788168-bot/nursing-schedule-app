@@ -3210,6 +3210,14 @@ if st.session_state.step >= 4:
                                         best_nurse = _block_nurse
                                     else:
                                         best_nurse = max(available, key=evaluate_nurse)
+                                    # pass_num=False 時 can_work_base 不查 week_variety
+                                    # 需在此補充驗證，防止週末 E/N 班造成一週三種班別
+                                    if not pass_num:
+                                        if not week_variety_ok(sched, best_nurse, s_type, d_int, first_wday, month_days):
+                                            # 此護師排入會違反 week_variety，跳過本缺口
+                                            _block_remaining[s_type].pop(best_nurse, None)
+                                            progress = True  # 仍標記有進展，避免死迴圈
+                                            break
                                     sched[best_nurse][d_int] = s_type
                                     # 更新塊追蹤器
                                     if _block_remaining[s_type].get(best_nurse, 0) > 0:
