@@ -5361,14 +5361,14 @@ if st.session_state.step >= 6:
                 actual_count = s_vals.count(pref_norm)
                 ded_status = f"✅ 達標 ({actual_count}班)" if actual_count >= 15 else f"⚠️ 未達標 ({actual_count}班)"
 
+            # is_no_hol 包含組長，但組長實際有加班線，改用 NO_HOL_ADMIN 排除加班顯示
+            _no_ot_display = pref_norm or (_title_s in NO_HOL_ADMIN)
             stats.append({
                 "姓名":        row["姓名"],
                 "職稱":        "🛡️ 母性保護" if is_protected else (str(row["職稱"]).strip() if is_leader else "護理師"),
                 "預休(O)":     off_count,
                 "特殊假別":    sp_leave_types,
                 "休假合計":    off_count + sp_leave_count,
-                # is_no_hol 包含組長，但組長實際有加班線，改用 NO_HOL_ADMIN 排除加班顯示
-                _no_ot_display = pref_norm or (_title_s in NO_HOL_ADMIN)
                 "加班天數":    "-" if _no_ot_display else ot_days_count_s[idx],
                 "平均線位":    "-" if _no_ot_display else avg_ot_line,
                 "12-8班數":   "-" if is_no_hol else s_vals.count("12-8"),
