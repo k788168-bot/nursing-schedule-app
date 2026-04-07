@@ -3064,6 +3064,7 @@ if st.session_state.step >= 4:
                                     available = [i for i in ai_df.index if can_work_base(i, s_type, d_int, strict_wow=pass_num)]
                                     available = [i for i in available if cache_pref[i] == ""]
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
+                                    # pass_num=False 時 can_work_base 不查 week_variety，此處補強過濾
                                     if not pass_num:
                                         available = [i for i in available
                                                      if week_variety_ok(sched, i, s_type, d_int,
