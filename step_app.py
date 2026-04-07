@@ -3196,11 +3196,11 @@ if st.session_state.step >= 4:
                                         best_nurse = _block_nurse
                                     else:
                                         best_nurse = max(available, key=evaluate_nurse)
-                                        # 非塊期護師：pass_num=False 時補驗 week_variety
-                                        if not week_variety_ok(sched, best_nurse, s_type, d_int,
-                                                               st.session_state.first_wday, month_days):
-                                            progress = True
-                                            break
+                                    # pass_num=False 時 can_work_base 不查 week_variety，此處補驗
+                                    if not week_variety_ok(sched, best_nurse, s_type, d_int,
+                                                           st.session_state.first_wday, month_days):
+                                        progress = True  # 避免死迴圈
+                                        break
                                     sched[best_nurse][d_int] = s_type
                                     # 更新塊追蹤器
                                     if _block_remaining[s_type].get(best_nurse, 0) > 0:
