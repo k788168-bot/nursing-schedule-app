@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.019"
+APP_VERSION = "1.021"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
@@ -3793,7 +3793,7 @@ if st.session_state.step >= 5:
                     f_s = "D" if _ps5 in ("N", "12-8") else _ps5
                 else:
                     f_s = "D"
-                for strict_wow, _wv_override in [(True, False), (False, False), (False, True)]:
+                for strict_wow, _wv_override in [(True, False), (False, False), (False, False)]:
                     if worked >= target: break
                     # 優先補填「兩側皆已是班」的空隙，其次補延伸連班，最後才補孤立空格
                     def _day_pat5(d):
@@ -4181,7 +4181,7 @@ if st.session_state.step >= 5:
                             if cache_title[i] in ADMIN_TITLES and _stype_ep != "D": continue
                             if cache_title[i] in NO_HOL_SET and d_int in _hol_set_ep: continue
                             if sum(1 for x in sched[i] if is_work(x)) >= personal_targets.get(i, 0): continue
-                            if not can_work_base(i, _stype_ep, d_int, strict_wow=False, week_variety_override=True): continue
+                            if not can_work_base(i, _stype_ep, d_int, strict_wow=False, week_variety_override=False): continue
                             if _stype_ep in ("E", "12-8") and not group_cap_ok(i, _stype_ep, d_int, sched, cache_group5): continue
                             _cands_ep.append(i)
 
