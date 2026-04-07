@@ -3064,14 +3064,9 @@ if st.session_state.step >= 4:
                                     available = [i for i in ai_df.index if can_work_base(i, s_type, d_int, strict_wow=pass_num)]
                                     available = [i for i in available if cache_pref[i] == ""]
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
-                                    if pass_num:
-                                        available = [i for i in available
-                                                     if week_variety_ok(sched, i, s_type, d_int,
-                                                                        st.session_state.first_wday, month_days)]
-                                    if not pass_num:
-                                        available = [i for i in available
-                                                     if week_variety_ok(sched, i, s_type, d_int,
-                                                                        st.session_state.first_wday, month_days)]
+                                    available = [i for i in available
+                                                 if week_variety_ok(sched, i, s_type, d_int,
+                                                                    st.session_state.first_wday, month_days)]
                                     if not available: continue
 
                                     # ── 最小塊優先：塊期內的護師直接插入，不參與競爭 ──
@@ -3253,6 +3248,8 @@ if st.session_state.step >= 4:
                             if is_work(sched[n_idx][_fd4]): _sc4e += 1
                             else: break
                         if _sc4e > 5: return False
+                        if not week_variety_ok(sched, n_idx, s, d_int, st.session_state.first_wday, month_days):
+                            return False
                         return True
 
                     def _can_D_nocheck4(n_idx, d_int):
