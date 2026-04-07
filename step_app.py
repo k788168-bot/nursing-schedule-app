@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.007"
+APP_VERSION = "1.019"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
@@ -3981,7 +3981,7 @@ if st.session_state.step >= 5:
                             elif eff_2b == "12-8":
                                 if sum(1 for i in ai_df.index if sched[i][d_int] == "12-8") >= int(_rowq_2b.iloc[0]["12-8"]): continue
                         except (KeyError, ValueError): pass
-                    if can_work_force5(n_idx, eff_2b, d_int, week_variety_override=True):
+                    if can_work_force5(n_idx, eff_2b, d_int, week_variety_override=False):
                         if eff_2b in ("12-8", "E") and not group_cap_ok(n_idx, eff_2b, d_int, sched, cache_group5): continue
                         sched[n_idx][d_int] = eff_2b
 
@@ -4048,6 +4048,7 @@ if st.session_state.step >= 5:
                                        if _cd3 != d_int and is_work(_xmonth_shift(n_idx, _cd3, sched, ai_df, month_days)))
                             if _ww3 + 1 > 12: _14ok3 = False; break
                         if not _14ok3: continue
+                        if not week_variety_ok(sched, n_idx, _s3, d_int, st.session_state.first_wday, month_days): continue
                         if _s3 in ("12-8", "E") and not group_cap_ok(n_idx, _s3, d_int, sched, cache_group5): continue
                         sched[n_idx][d_int] = _s3
 
@@ -4126,7 +4127,7 @@ if st.session_state.step >= 5:
                         _ww_fp = sum(1 for _cd in range(_sd_fp, _ed_fp + 1) if _cd != d_int and is_work(_xmonth_shift(n_idx, _cd, sched, ai_df, month_days)))
                         if _ww_fp + 1 > 12: _14ok_fp = False; break
                     if not _14ok_fp: continue
-                    # ★ week_variety_ok 此處刻意略過（Final Pass 的唯一放寬）
+                    if not week_variety_ok(sched, n_idx, _eff_fp, d_int, st.session_state.first_wday, month_days): continue
                     if _eff_fp in ("12-8", "E") and not group_cap_ok(n_idx, _eff_fp, d_int, sched, cache_group5): continue
                     sched[n_idx][d_int] = _eff_fp
 
