@@ -2233,9 +2233,10 @@ if st.session_state.step >= 3:
                                     sum(1 for v in sched[i] if is_work(v)),                               # 次排：總出勤
                                     sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 再排：達標比例
                                 ))
-                                # 假日：每次只讓假日出勤最少的1人取得（嚴格輪替，防止壟斷）
-                                # 平日：最多排入 len-1 人（減少碎片化）
-                                _day_limit3 = 1 if _is_hol_d3 else max(1, len(group3) - 1)
+                                # 假日 E/N 班：每次只讓假日出勤最少的1人取得（嚴格輪替，防止壟斷）
+                                # 假日 D/12-8 補充班 或 平日：正常排入 len-1 人
+                                _is_pack_night3 = pref_s in ("E", "N")
+                                _day_limit3 = 1 if (_is_hol_d3 and _is_pack_night3) else max(1, len(group3) - 1)
                                 _day_placed3 = 0   # 本日已排入人數
                                 for idx in group3_sorted:
                                     if _day_placed3 >= _day_limit3: break  # 本日已達上限，讓位給其他人
@@ -3803,9 +3804,7 @@ if st.session_state.step >= 5:
                     days_list = sorted(range(1, month_days + 1), key=_day_pat5)
                     for d_int in days_list:
                         if worked >= target: break
-                        # 包班人員：E/N 每日配額強制上限
-                        # 已達 PACK_MIN_SHIFTS 班後，若當日 E/N 額滿則改排 D
-                        eff_s5 = f_s
+                        eff_s5 = f_s  # 有效班別，可能在配額滿時降級為 12-8
                         if _pref5 and f_s in ("E", "N"):
                             q_col5 = f"{f_s}班"
                             row_d5 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
@@ -3813,8 +3812,12 @@ if st.session_state.step >= 5:
                                 req5 = int(row_d5.iloc[0][q_col5])
                                 curr5 = sum(1 for i in ai_df.index if sched[i][d_int] == f_s)
                                 if curr5 >= req5:
-                                    # 包班人員不改排白班，直接跳過
-                                    continue
+                                    # E包班：配額滿時嘗試補 12-8（E→12-8 合法）
+                                    # N包班：已在上方設為 f_s="D"，不應進到這裡
+                                    if f_s == "E":
+                                        eff_s5 = "12-8"
+                                    else:
+                                        continue  # N班配額滿，跳過此天
                         # ── 補足 Pass 1：D班 / 12-8 每日配額上限檢查 ──
                         # 假日：嚴格遵守配額上限（假日人力有限）
                         # 平日：允許超出配額最多 3 人的緩衝（幫助欠班護理師補足），超過緩衝才截止
@@ -5364,8 +5367,10 @@ if st.session_state.step >= 6:
                 "預休(O)":     off_count,
                 "特殊假別":    sp_leave_types,
                 "休假合計":    off_count + sp_leave_count,
-                "加班天數":    "-" if (pref_norm or is_no_hol) else ot_days_count_s[idx],
-                "平均線位":    "-" if (pref_norm or is_no_hol) else avg_ot_line,
+                # is_no_hol 包含組長，但組長實際有加班線，改用 NO_HOL_ADMIN 排除加班顯示
+                _no_ot_display = pref_norm or (_title_s in NO_HOL_ADMIN)
+                "加班天數":    "-" if _no_ot_display else ot_days_count_s[idx],
+                "平均線位":    "-" if _no_ot_display else avg_ot_line,
                 "12-8班數":   "-" if is_no_hol else s_vals.count("12-8"),
                 "夜班數":      "-" if is_no_hol else night_count,
                 "包班狀態":    ded_status,
