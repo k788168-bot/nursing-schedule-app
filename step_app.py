@@ -1198,13 +1198,13 @@ with st.sidebar:
     _val_file = st.file_uploader(
         "上傳微調後的班表 Excel", type=["xlsx"], key="validator_upload"
     )
-    if _val_file and st.session_state.get("ai_df") is not None:
+    if _val_file:
         try:
-            _ai = st.session_state.ai_df
+            _ai = st.session_state.get("ai_df")          # None → 獨立驗證模式
             _quota = st.session_state.get("edited_quota_df")
             if _quota is None:
                 _quota = st.session_state.get("quota_df")
-            _md = st.session_state.month_days
+            _md = st.session_state.get("month_days")     # None → 從班表推算
             # 讀取上傳的班表（取第一個工作表）
             _val_xl_raw = pd.read_excel(_val_file, sheet_name=0, header=None)
             # ── 自動偵測 header 格式：支援系統輸出格式 及 外部班表格式 ──
@@ -1235,10 +1235,33 @@ with st.sidebar:
                     if _dates_seq[_si] < _dates_seq[_si - 1] and _dates_seq[_si] <= 5:
                         _split = _si
                         break
+                # 本月原始欄位
+                _raw_this_month = _date_cols_raw[_split:] if _split else _date_cols_raw
+                # 若未載入月份天數，從班表欄位推算
+                if _md is None:
+                    _raw_days_tmp = [d for _, d in _raw_this_month]
+                    _md = max(_raw_days_tmp) if _raw_days_tmp else 31
                 # 本月欄位映射：col_index → day
-                _this_month_cols = _date_cols_raw[_split:] if _split else _date_cols_raw
-                _this_month_cols = [(ci, d) for ci, d in _this_month_cols if 1 <= d <= _md]
+                _this_month_cols = [(ci, d) for ci, d in _raw_this_month if 1 <= d <= _md]
                 _col_to_day = {ci: d for ci, d in _this_month_cols}
+                # ── 若未載入人員資料，從班表自動萃取姓名與職稱（獨立驗證模式）──
+                if _ai is None:
+                    _title_ci_sa = _hdr.index("職稱") if "職稱" in _hdr else None
+                    _sa_names, _sa_titles = [], {}
+                    for _ri_sa in range(_hdr_row_idx + 1, len(_val_xl_raw)):
+                        _vn_sa = str(_val_xl_raw.iloc[_ri_sa, _name_col_idx_v]).strip()
+                        if not _vn_sa or _vn_sa in ("nan","NaN","None","姓名"): continue
+                        try: float(_vn_sa); continue
+                        except: pass
+                        if _vn_sa not in _sa_names:
+                            _sa_names.append(_vn_sa)
+                            if _title_ci_sa is not None:
+                                _sa_titles[_vn_sa] = str(_val_xl_raw.iloc[_ri_sa, _title_ci_sa]).strip()
+                    _ai = pd.DataFrame({
+                        "姓名": _sa_names,
+                        "職稱": [_sa_titles.get(n, "") for n in _sa_names],
+                    }).reset_index(drop=True)
+                    st.info(f"ℹ️ 獨立驗證模式：從班表自動偵測到 {len(_sa_names)} 位人員（共 {_md} 天）。未載入配額資料時，配額相關檢查將略過。")
                 # 資料行：姓名非空、非統計行
                 _ai_names = _ai["姓名"].str.strip().tolist()
                 _val_aligned = _ai[["姓名"]].copy().reset_index(drop=True)
@@ -1416,8 +1439,6 @@ with st.sidebar:
                         st.success("✅ 全月無班別接續違規（§34 換班間距符合規定）")
         except Exception as _e:
             st.error(f"解析失敗：{_e}，請確認上傳的班表格式與系統輸出的 Excel 格式一致")
-    elif _val_file and st.session_state.get("ai_df") is None:
-        st.warning("請先完成第一步（載入人員資料），再使用驗證站")
 
     st.divider()
     st.markdown("## 📊 加班線分配 + 變形工時審查")
