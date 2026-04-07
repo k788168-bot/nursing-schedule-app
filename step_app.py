@@ -3016,27 +3016,18 @@ if st.session_state.step >= 4:
                     remaining_night_demand = max(0, total_night_demand - pack_night_supply)
                     target_night = remaining_night_demand // len(elig_night_nurses) if elig_night_nurses else 0
 
-                    # ── N/E 班最小塊輪次機制：每人連排至少 MIN_BLOCK 天後才換人 ──
-                    # 仿照人工護理長邏輯：一旦某人開始排 N/E 塊，保障連排到最小塊大小
-                    # 例外：硬性限制（連五/14日窗口/配額）仍優先，無法繼續時自然放棄
-                    _MIN_BLOCK = 3   # 最小連排天數（可調整；3 天對應人工班表最常見的 N 塊大小）
-                    _block_remaining = {s: {} for s in ["N", "E"]}  # {s_type: {nurse_idx: remaining}}
-                    # ── 個人夜班上限：防止最小塊機制讓少數人壟斷所有 N/E 班 ──
-                    # 上限 = 全月該班別需求總量 ÷ 有資格護師數 × 1.5（寬鬆係數）
-                    _elig_n = [i for i in ai_df.index
-                               if cache_pref[i] == "" and cache_night[i] in ("大夜","小夜")
-                               and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
-                    _elig_e = [i for i in ai_df.index
-                               if cache_pref[i] == "" and cache_night[i] in ("大夜","小夜")
-                               and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
+                    _MIN_BLOCK = 3
+                    _block_remaining = {s: {} for s in ["N", "E"]}
+                    _elig_night = [i for i in ai_df.index
+                                   if cache_pref[i] == "" and cache_night[i] in ("大夜", "小夜")
+                                   and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
                     def _get_block_cap(s_type):
-                        elig = _elig_n if s_type == "N" else _elig_e
                         total_req = sum(
                             int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0][f"{s_type}班"])
                             for d in range(1, month_days + 1)
                             if not edited_quota_df[edited_quota_df["日期"] == str(d)].empty
                         )
-                        return max(int(total_req / max(len(elig), 1) * 2.0), _MIN_BLOCK + 1)
+                        return max(int(total_req / max(len(_elig_night), 1) * 2.0), _MIN_BLOCK + 1)
                     _block_cap = {s: _get_block_cap(s) for s in ["N", "E"]}
 
                     def assign_night_shifts(s_type):
@@ -3072,10 +3063,7 @@ if st.session_state.step >= 4:
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
                                     if not available: continue
 
-                                    # ── 最小塊優先：若有護師仍在「塊剩餘期」且今天合法，直接選她 ──
-                                    # 附加防護1：若已達個人夜班上限，強制解除塊期
-                                    # 附加防護2：pass_num=False 時 can_work_base 不查 week_variety，
-                                    #            需獨立確認本次插入不造成一週三種班別
+                                    # ── 最小塊優先：塊期內的護師直接插入，不參與競爭 ──
                                     _block_nurse = None
                                     for _bi in available:
                                         if _block_remaining[s_type].get(_bi, 0) > 0:
@@ -3083,11 +3071,10 @@ if st.session_state.step >= 4:
                                             if _cur_n >= _block_cap[s_type]:
                                                 _block_remaining[s_type][_bi] = 0
                                                 continue
-                                            # pass_num=False 時獨立驗證 week_variety
-                                            if not pass_num:
-                                                if not week_variety_ok(sched, _bi, s_type, d_int, first_wday, month_days):
-                                                    _block_remaining[s_type][_bi] = 0  # 違規則終止塊期
-                                                    continue
+                                            if not week_variety_ok(sched, _bi, s_type, d_int,
+                                                                   st.session_state.first_wday, month_days):
+                                                _block_remaining[s_type][_bi] = 0
+                                                continue
                                             _block_nurse = _bi
                                             break
 
@@ -3205,26 +3192,20 @@ if st.session_state.step >= 4:
 
                                         return score + random.random()
                                         
-                                    # 決定本次排入者：塊期內的護師優先，否則正常評分競爭
                                     if _block_nurse is not None:
                                         best_nurse = _block_nurse
                                     else:
                                         best_nurse = max(available, key=evaluate_nurse)
-                                    # pass_num=False 時 can_work_base 不查 week_variety
-                                    # 需在此補充驗證，防止週末 E/N 班造成一週三種班別
-                                    if not pass_num:
-                                        if not week_variety_ok(sched, best_nurse, s_type, d_int, first_wday, month_days):
-                                            # 此護師排入會違反 week_variety，跳過本缺口
-                                            _block_remaining[s_type].pop(best_nurse, None)
-                                            progress = True  # 仍標記有進展，避免死迴圈
+                                        # 非塊期護師：pass_num=False 時補驗 week_variety
+                                        if not week_variety_ok(sched, best_nurse, s_type, d_int,
+                                                               st.session_state.first_wday, month_days):
+                                            progress = True
                                             break
                                     sched[best_nurse][d_int] = s_type
                                     # 更新塊追蹤器
                                     if _block_remaining[s_type].get(best_nurse, 0) > 0:
-                                        # 此人已在塊期，遞減剩餘天數
                                         _block_remaining[s_type][best_nurse] -= 1
                                     else:
-                                        # 新開始一個塊，設定剩餘天數（不含今天本身）
                                         _block_remaining[s_type][best_nurse] = _MIN_BLOCK - 1
                                     progress = True
                                     break
