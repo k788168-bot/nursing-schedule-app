@@ -1437,6 +1437,40 @@ with st.sidebar:
                         st.dataframe(pd.DataFrame(_seq_viols6), use_container_width=True, hide_index=True)
                     else:
                         st.success("✅ 全月無班別接續違規（§34 換班間距符合規定）")
+                # ── 📥 下載驗證報告 ────────────────────────────────────────
+                st.divider()
+                st.markdown("#### 📥 下載驗證報告")
+                try:
+                    import io as _io_val
+                    _val_buf = _io_val.BytesIO()
+                    with pd.ExcelWriter(_val_buf, engine="openpyxl") as _val_wr:
+                        # 工作表1：公平性結算
+                        if _v_stats:
+                            pd.DataFrame(_v_stats).to_excel(_val_wr, sheet_name="公平性結算", index=False)
+                        # 工作表2：假日出勤分布
+                        if _hol_dist:
+                            _hol_df3.to_excel(_val_wr, sheet_name="假日出勤分布", index=False)
+                        # 工作表3：週多樣性違規
+                        _wv_df_out = pd.DataFrame(_wv_violations) if _wv_violations else pd.DataFrame({"結果": ["✅ 無違規"]})
+                        _wv_df_out.to_excel(_val_wr, sheet_name="週多樣性掃描", index=False)
+                        # 工作表4：欠班清單
+                        _def_df_out = pd.DataFrame(_deficit_list5) if _deficit_list5 else pd.DataFrame({"結果": ["✅ 全員達標"]})
+                        _def_df_out.to_excel(_val_wr, sheet_name="欠班清單", index=False)
+                        # 工作表5：班別接續違規
+                        _seq_df_out = pd.DataFrame(_seq_viols6) if _seq_viols6 else pd.DataFrame({"結果": ["✅ 無違規"]})
+                        _seq_df_out.to_excel(_val_wr, sheet_name="班別接續違規", index=False)
+                        # 工作表6：原始對齊班表
+                        _val_aligned.to_excel(_val_wr, sheet_name="對齊班表", index=False)
+                    _val_buf.seek(0)
+                    st.download_button(
+                        label="⬇️ 下載驗證報告 Excel",
+                        data=_val_buf.getvalue(),
+                        file_name="驗證報告.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_val_report",
+                    )
+                except Exception as _e_dl:
+                    st.warning(f"報告產生失敗：{_e_dl}")
         except Exception as _e:
             st.error(f"解析失敗：{_e}，請確認上傳的班表格式與系統輸出的 Excel 格式一致")
 
@@ -1444,14 +1478,14 @@ with st.sidebar:
     st.markdown("## 📊 加班線分配 + 變形工時審查")
     st.caption("上傳已排好班別的班表，系統自動分配白班加班線並驗證四周變形工時，不更動任何班別。")
     _ot_file = st.file_uploader("上傳班表 Excel（D/E/N/12-8 已排好）", type=["xlsx"], key="ot_upload")
-    if _ot_file and st.session_state.get("ai_df") is not None:
+    if _ot_file:
         try:
-            _ai_ot = st.session_state.ai_df
-            _md_ot = st.session_state.month_days
-            _hol_ot = set(st.session_state.holiday_list)
-            _sat_ot = st.session_state.saturdays_list
-            _sun_ot = st.session_state.sundays_list
-            _nat_ot = st.session_state.nat_holidays_list
+            _ai_ot = st.session_state.get("ai_df")        # None → 獨立模式
+            _md_ot = st.session_state.get("month_days")   # None → 從班表推算
+            _hol_ot = set(st.session_state.get("holiday_list", []))
+            _sat_ot = st.session_state.get("saturdays_list", [])
+            _sun_ot = st.session_state.get("sundays_list", [])
+            _nat_ot = st.session_state.get("nat_holidays_list", [])
             # 讀取上傳班表（支援系統輸出格式 及 外部多列標題格式）
             _ot_xl_raw = pd.read_excel(_ot_file, sheet_name=0, header=None)
             # 自動偵測 header 行（找含「姓名」的第一行）
@@ -1472,9 +1506,31 @@ with st.sidebar:
                 except: pass
             _ot_dates = [d for _, d in _ot_date_cols]
             _ot_split = next((i for i in range(1, len(_ot_dates)) if _ot_dates[i] < _ot_dates[i-1] and _ot_dates[i] <= 5), None)
-            _ot_this_month = _ot_date_cols[_ot_split:] if _ot_split else _ot_date_cols
-            _ot_this_month = [(ci, d) for ci, d in _ot_this_month if 1 <= d <= _md_ot]
+            _ot_raw_this = _ot_date_cols[_ot_split:] if _ot_split else _ot_date_cols
+            # 若未載入月份天數，從班表欄位推算
+            if _md_ot is None:
+                _ot_raw_days_tmp = [d for _, d in _ot_raw_this]
+                _md_ot = max(_ot_raw_days_tmp) if _ot_raw_days_tmp else 31
+            _ot_this_month = [(ci, d) for ci, d in _ot_raw_this if 1 <= d <= _md_ot]
             _ot_ci_to_day = {ci: d for ci, d in _ot_this_month}
+            # 若未載入人員資料，從班表自動萃取姓名與職稱（獨立模式）
+            if _ai_ot is None:
+                _ot_title_ci = _ot_hdr.index("職稱") if "職稱" in _ot_hdr else None
+                _ot_sa_names, _ot_sa_titles = [], {}
+                for _ri_ot in range(_ot_hdr_idx + 1, len(_ot_xl_raw)):
+                    _vn_ot = str(_ot_xl_raw.iloc[_ri_ot, _ot_name_ci]).strip()
+                    if not _vn_ot or _vn_ot in ("nan","NaN","None","姓名"): continue
+                    try: float(_vn_ot); continue
+                    except: pass
+                    if _vn_ot not in _ot_sa_names:
+                        _ot_sa_names.append(_vn_ot)
+                        if _ot_title_ci is not None:
+                            _ot_sa_titles[_vn_ot] = str(_ot_xl_raw.iloc[_ri_ot, _ot_title_ci]).strip()
+                _ai_ot = pd.DataFrame({
+                    "姓名": _ot_sa_names,
+                    "職稱": [_ot_sa_titles.get(n, "") for n in _ot_sa_names],
+                }).reset_index(drop=True)
+                st.info(f"ℹ️ 獨立分析模式：從班表自動偵測到 {len(_ot_sa_names)} 位人員（共 {_md_ot} 天）。假日/週末資訊未載入，加班線分配結果僅供參考。")
             # 對齊姓名索引
             _day_cols_ot = [str(d) for d in range(1, _md_ot + 1)]
             _ai_names_ot = _ai_ot["姓名"].str.strip().tolist()
@@ -1613,8 +1669,6 @@ with st.sidebar:
                                key="dl_ot")
         except Exception as _e_ot:
             st.error(f"處理失敗：{_e_ot}，請確認班表格式（第一欄為姓名，之後為1~{st.session_state.get('month_days',31)}日）")
-    elif _ot_file and st.session_state.get("ai_df") is None:
-        st.warning("請先完成第一步（載入人員資料），再使用此功能")
 
 st.title("🏥 層級式護理輔助排班工作站")
 st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.session_state.step} 步 / 共 7 步")
