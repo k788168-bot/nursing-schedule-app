@@ -3021,6 +3021,23 @@ if st.session_state.step >= 4:
                     # 例外：硬性限制（連五/14日窗口/配額）仍優先，無法繼續時自然放棄
                     _MIN_BLOCK = 3   # 最小連排天數（可調整；3 天對應人工班表最常見的 N 塊大小）
                     _block_remaining = {s: {} for s in ["N", "E"]}  # {s_type: {nurse_idx: remaining}}
+                    # ── 個人夜班上限：防止最小塊機制讓少數人壟斷所有 N/E 班 ──
+                    # 上限 = 全月該班別需求總量 ÷ 有資格護師數 × 1.5（寬鬆係數）
+                    _elig_n = [i for i in ai_df.index
+                               if cache_pref[i] == "" and cache_night[i] in ("大夜","小夜")
+                               and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
+                    _elig_e = [i for i in ai_df.index
+                               if cache_pref[i] == "" and cache_night[i] in ("大夜","小夜")
+                               and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
+                    def _get_block_cap(s_type):
+                        elig = _elig_n if s_type == "N" else _elig_e
+                        total_req = sum(
+                            int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0][f"{s_type}班"])
+                            for d in range(1, month_days + 1)
+                            if not edited_quota_df[edited_quota_df["日期"] == str(d)].empty
+                        )
+                        return max(int(total_req / max(len(elig), 1) * 1.5), _MIN_BLOCK + 1)
+                    _block_cap = {s: _get_block_cap(s) for s in ["N", "E"]}
 
                     def assign_night_shifts(s_type):
                         q_col = f"{s_type}班"
@@ -3056,11 +3073,16 @@ if st.session_state.step >= 4:
                                     if not available: continue
 
                                     # ── 最小塊優先：若有護師仍在「塊剩餘期」且今天合法，直接選她 ──
+                                    # 附加防護：若該護師已達個人夜班上限，強制清除塊期，不再優先
                                     _block_nurse = None
                                     for _bi in available:
                                         if _block_remaining[s_type].get(_bi, 0) > 0:
-                                            _block_nurse = _bi
-                                            break   # 同一天最多一人在塊期，找到即可
+                                            _cur_n = sum(1 for v in sched[_bi] if v == s_type)
+                                            if _cur_n >= _block_cap[s_type]:
+                                                _block_remaining[s_type][_bi] = 0  # 已達上限，解除塊期
+                                            else:
+                                                _block_nurse = _bi
+                                                break
 
                                     def evaluate_nurse(idx):
                                         night_worked = sum(1 for v in sched[idx] if v in ["E", "N", "12-8"])
