@@ -1201,30 +1201,64 @@ with st.sidebar:
     if _val_file and st.session_state.get("ai_df") is not None:
         try:
             _ai = st.session_state.ai_df
-            _quota = st.session_state.get("edited_quota_df") or st.session_state.get("quota_df")
+            _quota = st.session_state.get("edited_quota_df")
+            if _quota is None:
+                _quota = st.session_state.get("quota_df")
             _md = st.session_state.month_days
             # 讀取上傳的班表（取第一個工作表）
-            _val_xl = pd.read_excel(_val_file, sheet_name=0, header=0)
-            # 對齊姓名索引：依上傳班表的「姓名」欄與 ai_df 的姓名對齊
-            _name_col = [c for c in _val_xl.columns if "姓名" in str(c)]
-            if not _name_col:
-                st.error("找不到「姓名」欄，請確認上傳的班表格式正確")
+            _val_xl_raw = pd.read_excel(_val_file, sheet_name=0, header=None)
+            # ── 自動偵測 header 格式：支援系統輸出格式 及 外部班表格式 ──
+            # 掃描前5行，找包含「姓名」的 header 行
+            _hdr_row_idx = None
+            for _ri in range(min(5, len(_val_xl_raw))):
+                _row_vals = [str(v).strip() for v in _val_xl_raw.iloc[_ri].values]
+                if "姓名" in _row_vals:
+                    _hdr_row_idx = _ri
+                    break
+            if _hdr_row_idx is None:
+                st.error("找不到「姓名」欄，請確認班表格式正確")
             else:
-                _val_xl = _val_xl.rename(columns={_name_col[0]: "姓名"})
-                _day_cols_v = [str(d) for d in range(1, _md + 1)]
-                # 依 ai_df 的姓名順序重排上傳班表
+                # 以找到的行為 header 重新讀取
+                _hdr = [str(v).strip() for v in _val_xl_raw.iloc[_hdr_row_idx].values]
+                _name_col_idx_v = _hdr.index("姓名")
+                # 找所有純數字欄（日期）
+                _date_cols_raw = []
+                for _ci, _cv in enumerate(_hdr):
+                    try:
+                        _date_cols_raw.append((_ci, int(float(_cv))))
+                    except:
+                        pass
+                # 偵測跨月分界：日期從大跳到1
+                _dates_seq = [d for _, d in _date_cols_raw]
+                _split = None
+                for _si in range(1, len(_dates_seq)):
+                    if _dates_seq[_si] < _dates_seq[_si - 1] and _dates_seq[_si] <= 5:
+                        _split = _si
+                        break
+                # 本月欄位映射：col_index → day
+                _this_month_cols = _date_cols_raw[_split:] if _split else _date_cols_raw
+                _this_month_cols = [(ci, d) for ci, d in _this_month_cols if 1 <= d <= _md]
+                _col_to_day = {ci: d for ci, d in _this_month_cols}
+                # 資料行：姓名非空、非統計行
                 _ai_names = _ai["姓名"].str.strip().tolist()
-                _val_xl["姓名"] = _val_xl["姓名"].astype(str).str.strip()
                 _val_aligned = _ai[["姓名"]].copy().reset_index(drop=True)
-                for d in _day_cols_v:
-                    _val_aligned[d] = ""
-                for _, _vrow in _val_xl.iterrows():
-                    _vname = str(_vrow["姓名"]).strip()
-                    if _vname in _ai_names:
-                        _ridx = _ai_names.index(_vname)
-                        for d in _day_cols_v:
-                            if d in _vrow.index:
-                                _val_aligned.at[_ridx, d] = str(_vrow[d]).strip() if str(_vrow[d]).strip() not in ("nan", "NaN", "") else ""
+                for _dv in range(1, _md + 1):
+                    _val_aligned[str(_dv)] = ""
+                for _ri in range(_hdr_row_idx + 1, len(_val_xl_raw)):
+                    _vname = str(_val_xl_raw.iloc[_ri, _name_col_idx_v]).strip()
+                    if not _vname or _vname in ("nan", "NaN", "None", "姓名"):
+                        continue
+                    try:
+                        float(_vname)
+                        continue  # 跳過純數字（統計列）
+                    except:
+                        pass
+                    if _vname not in _ai_names:
+                        continue
+                    _ridx = _ai_names.index(_vname)
+                    for _ci, _d in _col_to_day.items():
+                        _raw_v = str(_val_xl_raw.iloc[_ri, _ci]).strip()
+                        _val_aligned.at[_ridx, str(_d)] = "" if _raw_v in ("nan", "NaN", "", "V") else _raw_v
                 st.success("班表解析成功，開始驗證...")
                 # 安全警示雷達
                 with st.expander("🚨 安全警示雷達", expanded=True):
