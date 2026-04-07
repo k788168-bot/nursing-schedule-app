@@ -3084,17 +3084,20 @@ if st.session_state.step >= 4:
                                         if not has_leader and is_leader_for_shift: score += 50000000
                                         if cache_circ[idx] and curr_circ < target_circ: score += 10000000
 
-                                        # ── 擴大版預休接軌加分：隔天是任何一種休日，封鎖日就不浪費可用空格 ──
-                                        # 涵蓋：護理師預休 O 日、週六、週日、國定假日
+                                        # ── 精確預休接軌加分：緩衝日是否浪費可排班位 ──
+                                        # 緩衝日（d+1）若本來就是休/週末/預休 → 不浪費空格 → 加分（完美接軌）
+                                        # 緩衝日（d+1）若是一般工作日        → 損失1個可排班位 → 懲罰（浪費日）
                                         _next_d4 = d_int + 1
-                                        _next_is_rest4 = (
-                                            _next_d4 in cache_pre_off4.get(idx, set())
-                                            or _next_d4 in set(sat_list4)
-                                            or _next_d4 in set(sun_list4)
-                                            or _next_d4 in set(nat_list4)
+                                        _buf_is_natural_rest4 = (
+                                            _next_d4 in cache_pre_off4.get(idx, set())  # 個人預休 O
+                                            or _next_d4 in set(sat_list4)               # 週六
+                                            or _next_d4 in set(sun_list4)               # 週日
+                                            or _next_d4 in set(nat_list4)               # 國定假日
                                         )
-                                        if _next_is_rest4:
-                                            score += 5_000_000
+                                        if _buf_is_natural_rest4:
+                                            score += 8_000_000   # 完美接軌：緩衝日完全不浪費
+                                        else:
+                                            score -= 3_000_000   # 緩衝日浪費1個工作日空格，懲罰
 
                                         # ── Block Preference：同班別連排加分 + 異種夜班相鄰懲罰 ──
                                         # 同班別連排：N-N / E-E / 12-8-12-8，夜班集中同週減少跨類型污染
