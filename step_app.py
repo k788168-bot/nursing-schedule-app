@@ -9,7 +9,9 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-st.set_page_config(page_title="層級式護理排班系統", layout="wide")
+APP_VERSION = "1.007"
+
+st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
 # ── 行政職稱常數 ──────────────────────────────────────────────
 # 只排白班（D）的職稱
@@ -2233,10 +2235,9 @@ if st.session_state.step >= 3:
                                     sum(1 for v in sched[i] if is_work(v)),                               # 次排：總出勤
                                     sum(1 for v in sched[i] if v == pref_s) / max(max_target3[i], 1),    # 再排：達標比例
                                 ))
-                                # 假日 E/N 班：每次只讓假日出勤最少的1人取得（嚴格輪替，防止壟斷）
-                                # 假日 D/12-8 補充班 或 平日：正常排入 len-1 人
-                                _is_pack_night3 = pref_s in ("E", "N")
-                                _day_limit3 = 1 if (_is_hol_d3 and _is_pack_night3) else max(1, len(group3) - 1)
+                                # 假日和平日都用 len//2 限制，讓每天輪流讓不同人取E
+                                # 排序已依假日出勤最少者優先，不需要用_day_limit=1來強制輪替
+                                _day_limit3 = max(1, len(group3) // 2)
                                 _day_placed3 = 0   # 本日已排入人數
                                 for idx in group3_sorted:
                                     if _day_placed3 >= _day_limit3: break  # 本日已達上限，讓位給其他人
