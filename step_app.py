@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.021"
+APP_VERSION = "1.022"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
