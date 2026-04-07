@@ -1285,7 +1285,10 @@ with st.sidebar:
                 st.success("班表解析成功，開始驗證...")
                 # 安全警示雷達
                 with st.expander("🚨 安全警示雷達", expanded=True):
-                    display_safety_radar(_val_aligned, _quota, _ai)
+                    if _quota is not None:
+                        display_safety_radar(_val_aligned, _quota, _ai)
+                    else:
+                        st.info("ℹ️ 未載入配額資料（quota），安全警示雷達需要配額資訊，本次略過此項檢查。")
                 # 勞基法四週變形工時審查
                 with st.expander("⚖️ 勞基法審查", expanded=True):
                     _pw_df, _viol_df = build_four_week_review(
