@@ -3103,8 +3103,8 @@ if st.session_state.step >= 4:
                                         # 確保夜班集中連排的同時，不讓少數人壟斷所有夜班大塊
                                         _night_types4 = ("E", "N", "12-8")
                                         _elig4 = [i for i in ai_df.index
-                                                  if cache_pref[i] == "" and cache_night5.get(i, "") != ""
-                                                  and not cache_preg5.get(i, False)]
+                                                  if cache_pref[i] == "" and cache_night.get(i, "") != ""
+                                                  and not cache_preg.get(i, False)]
                                         _avg_night4 = (sum(sum(1 for v in sched[i] if v in _night_types4) for i in _elig4)
                                                        / max(len(_elig4), 1))
                                         _my_night4 = sum(1 for v in sched[idx] if v in _night_types4)
