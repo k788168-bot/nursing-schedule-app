@@ -3016,6 +3016,12 @@ if st.session_state.step >= 4:
                     remaining_night_demand = max(0, total_night_demand - pack_night_supply)
                     target_night = remaining_night_demand // len(elig_night_nurses) if elig_night_nurses else 0
 
+                    # ── N/E 班最小塊輪次機制：每人連排至少 MIN_BLOCK 天後才換人 ──
+                    # 仿照人工護理長邏輯：一旦某人開始排 N/E 塊，保障連排到最小塊大小
+                    # 例外：硬性限制（連五/14日窗口/配額）仍優先，無法繼續時自然放棄
+                    _MIN_BLOCK = 3   # 最小連排天數（可調整；3 天對應人工班表最常見的 N 塊大小）
+                    _block_remaining = {s: {} for s in ["N", "E"]}  # {s_type: {nurse_idx: remaining}}
+
                     def assign_night_shifts(s_type):
                         q_col = f"{s_type}班"
                         for pass_num in [True, False]:
@@ -3048,7 +3054,14 @@ if st.session_state.step >= 4:
                                     available = [i for i in available if cache_pref[i] == ""]
                                     available = [i for i in available if group_cap_ok(i, s_type, d_int, sched, cache_group4)]
                                     if not available: continue
-                                    
+
+                                    # ── 最小塊優先：若有護師仍在「塊剩餘期」且今天合法，直接選她 ──
+                                    _block_nurse = None
+                                    for _bi in available:
+                                        if _block_remaining[s_type].get(_bi, 0) > 0:
+                                            _block_nurse = _bi
+                                            break   # 同一天最多一人在塊期，找到即可
+
                                     def evaluate_nurse(idx):
                                         night_worked = sum(1 for v in sched[idx] if v in ["E", "N", "12-8"])
                                         score = 0
@@ -3163,8 +3176,19 @@ if st.session_state.step >= 4:
 
                                         return score + random.random()
                                         
-                                    best_nurse = max(available, key=evaluate_nurse)
+                                    # 決定本次排入者：塊期內的護師優先，否則正常評分競爭
+                                    if _block_nurse is not None:
+                                        best_nurse = _block_nurse
+                                    else:
+                                        best_nurse = max(available, key=evaluate_nurse)
                                     sched[best_nurse][d_int] = s_type
+                                    # 更新塊追蹤器
+                                    if _block_remaining[s_type].get(best_nurse, 0) > 0:
+                                        # 此人已在塊期，遞減剩餘天數
+                                        _block_remaining[s_type][best_nurse] -= 1
+                                    else:
+                                        # 新開始一個塊，設定剩餘天數（不含今天本身）
+                                        _block_remaining[s_type][best_nurse] = _MIN_BLOCK - 1
                                     progress = True
                                     break
                                 if not progress: break  # 本輪無任何進展，提前結束
