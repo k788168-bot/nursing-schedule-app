@@ -4244,11 +4244,18 @@ if st.session_state.step >= 5:
                             if _curr_f >= _req_f:
                                 # 包班人員不改排白班，直接跳過
                                 continue
-                    # ── 補足 Pass 2：D班 / 12-8 每日配額上限檢查 ──
-                    # 假日：嚴格遵守配額上限；平日：允許超出配額最多 3 人的緩衝
+                    # ── 補足 Pass 2：D班配額上限 — 依欠班程度動態調整緩衝 ──
+                    # 欠班越嚴重 → 允許越大的配額緩衝，優先確保嚴重欠班者補到班
+                    # 絕對上限：平日 D 班每日不超過配額 +8（防止單日過度堆積）
                     _row_q_p2 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
                     _is_hol_p2 = d_int in _hol_set_f5
-                    _D_WEEKDAY_BUFFER_P2 = 5  # 平日D班每日最多允許超出配額的人數緩衝
+                    _deficit_p2 = max(0, personal_targets[n_idx] - sum(1 for v in sched[n_idx] if is_work(v)))
+                    if _deficit_p2 >= 3:
+                        _D_WEEKDAY_BUFFER_P2 = 8   # 嚴重欠班（≥3天）：最大緩衝
+                    elif _deficit_p2 >= 2:
+                        _D_WEEKDAY_BUFFER_P2 = 5   # 中度欠班（2天）
+                    else:
+                        _D_WEEKDAY_BUFFER_P2 = 3   # 輕度欠班（1天）：維持現狀
                     if not _row_q_p2.empty:
                         try:
                             if eff_sf == "D":
@@ -4262,7 +4269,7 @@ if st.session_state.step >= 5:
                                     if _is_hol_p2:
                                         if _curr_p2 >= _req_p2: continue  # 假日嚴守上限
                                     else:
-                                        if _curr_p2 >= _req_p2 + _D_WEEKDAY_BUFFER_P2: continue  # 平日允許超出最多3人
+                                        if _curr_p2 >= _req_p2 + _D_WEEKDAY_BUFFER_P2: continue
                             elif eff_sf == "12-8":
                                 _req_p2 = int(_row_q_p2.iloc[0]["12-8"])
                                 _curr_p2 = sum(1 for i in ai_df.index if sched[i][d_int] == "12-8")
@@ -4301,10 +4308,12 @@ if st.session_state.step >= 5:
                             if eff_2b == "D" and cache_title[n_idx] not in NO_HOL_ADMIN:
                                 _rq = int(_rowq_2b.iloc[0]["D班"])
                                 _cq = sum(1 for i in ai_df.index if isinstance(sched[i][d_int], str) and sched[i][d_int].startswith("D") and cache_title[i] not in NO_HOL_ADMIN)
+                                _deficit_2b = max(0, personal_targets[n_idx] - sum(1 for v in sched[n_idx] if is_work(v)))
+                                _buf_2b = 10 if _deficit_2b >= 3 else (7 if _deficit_2b >= 2 else 5)
                                 if d_int in _hol_set_f5:
                                     if _cq >= _rq: continue
                                 else:
-                                    if _cq >= _rq + 5: continue  # 平日允許超出最多5人
+                                    if _cq >= _rq + _buf_2b: continue
                             elif eff_2b == "12-8":
                                 if sum(1 for i in ai_df.index if sched[i][d_int] == "12-8") >= int(_rowq_2b.iloc[0]["12-8"]): continue
                         except (KeyError, ValueError): pass
