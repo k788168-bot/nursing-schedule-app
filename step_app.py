@@ -643,7 +643,6 @@ def build_colored_excel(final_sched_df, stats_df, explanation_df, shortages_expo
                         1 for _ri in range(len(final_sched_df))
                         if isinstance(final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)], str)
                         and final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)].upper().startswith("D")
-                        and final_sched_df.iat[_ri, final_sched_df.columns.get_loc(_dc_xl)].upper() != "DX"
                     )
                 else:
                     _cnt_xl = sum(
@@ -1371,7 +1370,7 @@ with st.sidebar:
                             for _dd4 in range(_ws4, _we4 + 1):
                                 _v4 = _vs4.get(_dd4, "")
                                 _vu4 = _v4.upper()
-                                if _vu4 in ("D","公") or (_vu4.startswith("D") and _vu4 not in ("DX","")): _wtypes4.add("D")
+                                if _vu4 in ("D","公","DX") or (_vu4.startswith("D") and _vu4 != ""): _wtypes4.add("D")
                                 elif _vu4 in ("E","E★","E*"): _wtypes4.add("E")
                                 elif _vu4 in ("N","N★","N*"): _wtypes4.add("N")
                                 elif _vu4 == "12-8": _wtypes4.add("12-8")
@@ -1421,7 +1420,7 @@ with st.sidebar:
                             # 正規化
                             def _norm6(v):
                                 vu = v.upper()
-                                if vu in ("D","公") or (vu.startswith("D") and vu not in ("DX","")): return "D"
+                                if vu in ("D","公","DX") or (vu.startswith("D") and vu != ""): return "D"
                                 if vu in ("E","E★","E*"): return "E"
                                 if vu in ("N","N★","N*"): return "N"
                                 if vu == "12-8": return "12-8"
