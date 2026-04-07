@@ -3036,7 +3036,7 @@ if st.session_state.step >= 4:
                             for d in range(1, month_days + 1)
                             if not edited_quota_df[edited_quota_df["日期"] == str(d)].empty
                         )
-                        return max(int(total_req / max(len(elig), 1) * 1.5), _MIN_BLOCK + 1)
+                        return max(int(total_req / max(len(elig), 1) * 2.0), _MIN_BLOCK + 1)
                     _block_cap = {s: _get_block_cap(s) for s in ["N", "E"]}
 
                     def assign_night_shifts(s_type):
@@ -3073,16 +3073,23 @@ if st.session_state.step >= 4:
                                     if not available: continue
 
                                     # ── 最小塊優先：若有護師仍在「塊剩餘期」且今天合法，直接選她 ──
-                                    # 附加防護：若該護師已達個人夜班上限，強制清除塊期，不再優先
+                                    # 附加防護1：若已達個人夜班上限，強制解除塊期
+                                    # 附加防護2：pass_num=False 時 can_work_base 不查 week_variety，
+                                    #            需獨立確認本次插入不造成一週三種班別
                                     _block_nurse = None
                                     for _bi in available:
                                         if _block_remaining[s_type].get(_bi, 0) > 0:
                                             _cur_n = sum(1 for v in sched[_bi] if v == s_type)
                                             if _cur_n >= _block_cap[s_type]:
-                                                _block_remaining[s_type][_bi] = 0  # 已達上限，解除塊期
-                                            else:
-                                                _block_nurse = _bi
-                                                break
+                                                _block_remaining[s_type][_bi] = 0
+                                                continue
+                                            # pass_num=False 時獨立驗證 week_variety
+                                            if not pass_num:
+                                                if not week_variety_ok(sched, _bi, s_type, d_int, first_wday, month_days):
+                                                    _block_remaining[s_type][_bi] = 0  # 違規則終止塊期
+                                                    continue
+                                            _block_nurse = _bi
+                                            break
 
                                     def evaluate_nurse(idx):
                                         night_worked = sum(1 for v in sched[idx] if v in ["E", "N", "12-8"])
