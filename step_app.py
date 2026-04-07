@@ -3016,7 +3016,7 @@ if st.session_state.step >= 4:
                     remaining_night_demand = max(0, total_night_demand - pack_night_supply)
                     target_night = remaining_night_demand // len(elig_night_nurses) if elig_night_nurses else 0
 
-                    _MIN_BLOCK = 3
+                    _MIN_BLOCK = 2
                     _block_remaining = {s: {} for s in ["N", "E"]}
                     _elig_night = [i for i in ai_df.index
                                    if cache_pref[i] == "" and cache_night[i] in ("大夜", "小夜")
@@ -3096,11 +3096,11 @@ if st.session_state.step >= 4:
                                         _y4 = sched[idx][d_int - 1] if d_int > 1 else ""
                                         _t4 = sched[idx][d_int + 1] if d_int < month_days else ""
                                         if is_work(_y4) and is_work(_t4):
-                                            score += 2_000_000   # 填補孤立休假空隙 → W-W-W（最優）
+                                            score += 2_500_000   # 填補孤立休假空隙 → W-W-W（最優）
                                         elif is_work(_y4) or is_work(_t4):
-                                            score += 500_000     # 延伸既有連班
+                                            score += 800_000     # 延伸既有連班
                                         else:
-                                            score -= 2_000_000   # 兩側皆休，形成孤立班（最差）
+                                            score -= 2_500_000   # 兩側皆休，形成孤立班（最差）
 
                                         # 💡 階梯式控台權重
                                         l_str_idx = cache_leader_str[idx]
@@ -3137,9 +3137,9 @@ if st.session_state.step >= 4:
                                         _block_direct = (_prev1_b4 == s_type or _next1_b4 == s_type)
                                         _block_skip   = (_prev2_b4 == s_type or _next2_b4 == s_type)
                                         if _block_direct:
-                                            score += 4_000_000   # 直接相鄰同班別（E/12-8 連排）：最優
+                                            score += 3_000_000   # 直接相鄰同班別（E/12-8 連排）：最優
                                         elif _block_skip:
-                                            score += 3_000_000   # 跳過緩衝日的同班別（N-N 連排模式）
+                                            score += 2_000_000   # 跳過緩衝日的同班別（N-N 連排模式）
                                         # 異種夜班相鄰懲罰（前後各 2 格內有不同夜班類型）
                                         _near4 = [_prev1_b4, _prev2_b4, _next1_b4, _next2_b4]
                                         if any(v in _night_types4 and v != s_type for v in _near4):
