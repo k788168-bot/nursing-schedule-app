@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.022"
+APP_VERSION = "1.023"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
@@ -2970,6 +2970,7 @@ if st.session_state.step >= 4:
                         qual = cache_night[n_idx]
                         if s == "N" and qual != "大夜": return False
                         if s == "E" and qual not in ["大夜", "小夜"]: return False
+                        if s == "12-8" and qual not in ("大夜", "小夜", "中班") and not cache_preg[n_idx]: return False
                         
                         worked = sum(1 for x in sched[n_idx] if is_work(x))
                         if worked >= personal_targets[n_idx]: return False
@@ -3020,21 +3021,26 @@ if st.session_state.step >= 4:
                     target_night = remaining_night_demand // len(elig_night_nurses) if elig_night_nurses else 0
 
                     _MIN_BLOCK = 2
-                    _block_remaining = {s: {} for s in ["N", "E"]}
+                    _block_remaining = {s: {} for s in ["N", "E", "12-8"]}
                     _elig_night = [i for i in ai_df.index
                                    if cache_pref[i] == "" and cache_night[i] in ("大夜", "小夜")
                                    and not cache_preg[i] and cache_title[i] not in ADMIN_TITLES]
+                    _elig_12_8_base = [i for i in ai_df.index
+                                       if cache_pref[i] == "" and cache_night[i] in ("大夜", "小夜", "中班")
+                                       and cache_title[i] not in ADMIN_TITLES]
                     def _get_block_cap(s_type):
+                        _q_col = "12-8" if s_type == "12-8" else f"{s_type}班"
+                        _pool  = _elig_12_8_base if s_type == "12-8" else _elig_night
                         total_req = sum(
-                            int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0][f"{s_type}班"])
+                            int(edited_quota_df[edited_quota_df["日期"] == str(d)].iloc[0][_q_col])
                             for d in range(1, month_days + 1)
                             if not edited_quota_df[edited_quota_df["日期"] == str(d)].empty
                         )
-                        return max(int(total_req / max(len(_elig_night), 1) * 2.0), _MIN_BLOCK + 1)
-                    _block_cap = {s: _get_block_cap(s) for s in ["N", "E"]}
+                        return max(int(total_req / max(len(_pool), 1) * 2.0), _MIN_BLOCK + 1)
+                    _block_cap = {s: _get_block_cap(s) for s in ["N", "E", "12-8"]}
 
                     def assign_night_shifts(s_type):
-                        q_col = f"{s_type}班"
+                        q_col = "12-8" if s_type == "12-8" else f"{s_type}班"
                         for pass_num in [True, False]:
                             for _iter in range(month_days * 10):  # 最多迭代 month_days×10 次，防止無限迴圈
                                 progress = False
@@ -3045,8 +3051,14 @@ if st.session_state.step >= 4:
                                     if req > curr: deficits.append((d, req - curr, req))
                                 
                                 if not deficits: break
-                                deficits.sort(key=lambda x: (x[1], random.random()), reverse=True)
-                                
+                                # 稀缺優先：當天有資格人數越少 → 越難填 → 越優先；次排欠班數降序
+                                _pool_s = _elig_12_8_base if s_type == "12-8" else _elig_night
+                                deficits.sort(key=lambda x: (
+                                    sum(1 for i in _pool_s if sched[i][x[0]] == ""),  # 少 → 先
+                                    -x[1],                                              # 欠多 → 先
+                                    random.random()
+                                ))
+
                                 for d_int, defc, req in deficits:
                                     curr_nurses = [i for i in ai_df.index if sched[i][d_int] == s_type]
                                     curr_circ = sum(1 for i in curr_nurses if cache_circ[i])
@@ -3214,7 +3226,7 @@ if st.session_state.step >= 4:
                                     break
                                 if not progress: break  # 本輪無任何進展，提前結束
 
-                    for s_t in ["N", "E"]:
+                    for s_t in ["N", "E", "12-8"]:
                         assign_night_shifts(s_t)
 
                     # ── E/N 事後均等化（保證均等池內夜班差距 ≤ 1）─────────────
@@ -3411,7 +3423,11 @@ if st.session_state.step >= 4:
                                         leave_count = sum(1 for i in ai_df.index if not is_work(sched[i][d]) and sched[i][d] != "")
                                         deficits.append((d, req - curr, leave_count))
                                 if not deficits: break
-                                deficits.sort(key=lambda x: (x[1], x[2], random.random()), reverse=True)
+                                deficits.sort(key=lambda x: (
+                                    sum(1 for i in elig_12_8_s4 if sched[i][x[0]] == ""),  # 少 → 先
+                                    -x[1],
+                                    random.random()
+                                ))
                                 for d_int, defc, _ in deficits:
                                     curr_nurses_12 = [i for i in ai_df.index if sched[i][d_int] == "12-8"]
                                     curr_circ_12   = sum(1 for i in curr_nurses_12 if cache_circ[i])
