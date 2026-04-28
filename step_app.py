@@ -445,48 +445,62 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
         """True = 平日（非六日非國定）"""
         return d_int not in hol_set if hol_set else True
 
+    def _count_special_leave(row, month_days):
+        """解析特殊假別，支援 '喪假:24,28,29' 與 '6,7,8' 兩種格式，回傳有效天數清單。"""
+        days = []
+        sp_str = str(row.get("特殊假別", "")).strip()
+        if not sp_str or sp_str == "nan":
+            return days
+        for item in sp_str.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if ":" in item:
+                # 格式「喪假:24」→ 取冒號後的數字
+                item = item.split(":", 1)[1].strip()
+            try:
+                d_int_sp = int(float(item))
+                if 1 <= d_int_sp <= month_days:
+                    days.append(d_int_sp)
+            except (ValueError, TypeError):
+                pass
+        return days
+
     if target_off is not None:
         # ── 新邏輯 ────────────────────────────────────────────────────────────
-        # ① 特殊假別：不論平假日一律扣
-        special_leave_days = 0
-        sp_str = str(row.get("特殊假別", "")).strip()
-        if sp_str:
-            for item in sp_str.split(","):
-                sep = ":" if ":" in item else "-"
-                parts = item.split(sep, 1)
-                if len(parts) >= 1 and parts[0].strip().isdigit():
-                    d_int_sp = int(parts[0].strip())
-                    if 1 <= d_int_sp <= month_days:   # 不過濾平假日
-                        special_leave_days += 1
+        # ① 特殊假別：不論平假日一律直接扣上班天數（不佔應休預算）
+        special_leave_days = len(_count_special_leave(row, month_days))
 
-        # ② 長假：只有平日才扣
+        # ② 長假：只有平日才扣（假日長假已含於 target_off 應休預算）
         long_leave_days = 0
         long_leave_str = str(row.get("預約長假日期", "")).strip()
-        if long_leave_str:
-            long_leave_days = sum(
-                1 for d in long_leave_str.split(",")
-                if d.strip().isdigit()
-                and 1 <= int(d.strip()) <= month_days
-                and is_weekday(int(d.strip()))
-            )
+        if long_leave_str and long_leave_str != "nan":
+            for _d in long_leave_str.split(","):
+                try:
+                    _di = int(float(_d.strip()))
+                    if 1 <= _di <= month_days and is_weekday(_di):
+                        long_leave_days += 1
+                except (ValueError, TypeError):
+                    pass
 
         if target_off == 0:
             # ── NO_HOL_SET（護理長/組長等，無固定假日預算）───────────────────
             # 平日預休（O）仍需扣減
             pre_o_days = 0
             pre_o_str = str(row.get("預休日期", "")).strip()
-            if pre_o_str:
-                pre_o_days = sum(
-                    1 for d in pre_o_str.split(",")
-                    if d.strip().isdigit()
-                    and 1 <= int(d.strip()) <= month_days
-                    and is_weekday(int(d.strip()))
-                )
+            if pre_o_str and pre_o_str != "nan":
+                for _d in pre_o_str.split(","):
+                    try:
+                        _di = int(float(_d.strip()))
+                        if 1 <= _di <= month_days and is_weekday(_di):
+                            pre_o_days += 1
+                    except (ValueError, TypeError):
+                        pass
             excess_rest = pre_o_days + long_leave_days
 
             # 假日公差補休抵扣：假日出公差屬額外出勤，每一假日公差補休一天
             gongcha_str = str(row.get("公差日期", "")).strip()
-            if gongcha_str:
+            if gongcha_str and gongcha_str != "nan":
                 gongcha_hol_credit = sum(
                     1 for d in gongcha_str.split(",")
                     if d.strip().isdigit()
@@ -497,30 +511,41 @@ def calc_extra_leaves(row, month_days, sat_set=None, sun_set=None, nat_set=None,
 
             return excess_rest + special_leave_days
         else:
-            # ── 一般護理師：O 一律不扣，長假平日直接扣 ─────────────────────
-            return long_leave_days + special_leave_days
+            # ── 一般護理師 ──────────────────────────────────────────────────
+            # 規則：
+            #   ① 預休（O）與長假 算在每月應休天數（target_off）內；
+            #      超出 target_off 的平日部分才扣減 personal_targets。
+            #      → 平日長假 / 平日預休 都直接扣（已超出 target_off 週末假日預算）
+            #   ② 特殊假別 不透過 personal_targets 扣減。
+            #      只在 base_sched 佔住特定日期（設為 O），排班時自然無法排班，
+            #      最終上班天數自然降低（「直接減少上班天數」的含義是最終結果減少，
+            #      而非從目標值扣）。
+            pre_rest_weekday = 0
+            pre_rest_str = str(row.get("預休日期", "")).strip()
+            if pre_rest_str and pre_rest_str != "nan":
+                for _d in pre_rest_str.split(","):
+                    try:
+                        _di = int(float(_d.strip()))
+                        if 1 <= _di <= month_days and is_weekday(_di):
+                            pre_rest_weekday += 1
+                    except (ValueError, TypeError):
+                        pass
+            # 特殊假別不加入 extra_leaves，只透過佔住 O 日期影響實際排班結果
+            return long_leave_days + pre_rest_weekday
     else:
         # ── 舊邏輯（向下相容）：O 不扣，長假 + 特殊假別只有平日才扣 ──────────
-        special_leave_days = 0
-        sp_str = str(row.get("特殊假別", "")).strip()
-        if sp_str:
-            for item in sp_str.split(","):
-                sep = ":" if ":" in item else "-"
-                parts = item.split(sep, 1)
-                if len(parts) >= 1 and parts[0].strip().isdigit():
-                    d_int_sp = int(parts[0].strip())
-                    if 1 <= d_int_sp <= month_days and is_weekday(d_int_sp):
-                        special_leave_days += 1
+        special_leave_days = sum(1 for d in _count_special_leave(row, month_days) if is_weekday(d))
 
         long_leave_days = 0
         long_leave_str = str(row.get("預約長假日期", "")).strip()
-        if long_leave_str:
-            long_leave_days = sum(
-                1 for d in long_leave_str.split(",")
-                if d.strip().isdigit()
-                and 1 <= int(d.strip()) <= month_days
-                and is_weekday(int(d.strip()))
-            )
+        if long_leave_str and long_leave_str != "nan":
+            for _d in long_leave_str.split(","):
+                try:
+                    _di = int(float(_d.strip()))
+                    if 1 <= _di <= month_days and is_weekday(_di):
+                        long_leave_days += 1
+                except (ValueError, TypeError):
+                    pass
         return long_leave_days + special_leave_days
 
 # ============================================================
@@ -4161,6 +4186,12 @@ if st.session_state.step >= 4:
                         if not _swappedu:
                             break  # 無法再縮小差距，停止
 
+                    # ── 儲存 Step 4 夜班均衡上限（供 Step 5 方案B保護用）──────────────
+                    # 記錄均衡化完成後每位護理師的實際夜班數，取最大值+1作為 Step 5 上限
+                    _s4_final_nc = {i: sum(1 for v in sched[i] if v in ("E","N","12-8")) for i in _night_elig_set4b}
+                    st.session_state._s4_night_ceiling = max(_s4_final_nc.values(), default=0) + 1
+                    st.session_state._s4_night_elig    = set(_night_elig_set4b)
+
                     night_df = pd.DataFrame({"姓名": ai_df["姓名"]})
                     for d in range(1, month_days + 1):
                         night_df[str(d)] = [sched[i][d] for i in ai_df.index]
@@ -4668,6 +4699,55 @@ if st.session_state.step >= 5:
             if st.session_state.skill_cols:
                 for sk in st.session_state.skill_cols: assign_d_shifts(target_skill=sk)
             assign_d_shifts()
+
+            # ── D→12-8 優先化（方案 B）：12-8 不足者從 D 班置換，同時保護夜班均衡上限 ──
+            # 在 assign_d_shifts 之後執行，確保 D 班配額已滿足再進行置換
+            # 保護條件：
+            #   1. 護理師屬於 Step 4 均衡池（_s4_night_elig）
+            #   2. 目前總夜班數 (E+N+12-8) < Step 4 均衡上限（均衡最大值 +1）
+            #   3. 當日 D 班扣1人後 ≥ 配額（確保 D 人力不會不足）
+            #   4. 當日 12-8 配額仍有餘裕
+            _s4_ceil5 = st.session_state.get("_s4_night_ceiling", 999)
+            _s4_elig5 = st.session_state.get("_s4_night_elig", set())
+            _total_128_s5 = sum(
+                int(edited_quota_df[edited_quota_df["日期"] == str(_d128)].iloc[0]["12-8"])
+                for _d128 in range(1, month_days + 1)
+            )
+            _128_tgt5 = round(_total_128_s5 / len(_s4_elig5)) if _s4_elig5 else 0
+
+            for n_idx in ai_df.index:
+                if n_idx not in _s4_elig5: continue
+                _cur_ngt5 = sum(1 for v in sched[n_idx] if v in ("E","N","12-8"))
+                if _cur_ngt5 >= _s4_ceil5: continue           # 已達夜班均衡上限，不再加排
+                _cur_128_5 = sum(1 for v in sched[n_idx] if v == "12-8")
+                if _cur_128_5 >= _128_tgt5: continue           # 12-8 已達個人目標
+                for d_int in range(1, month_days + 1):
+                    if sched[n_idx][d_int] != "D": continue    # 只改 D 班
+                    if d_int in _hol_set5: continue            # 假日不換（假日D班人力需求不同）
+                    _rq5 = edited_quota_df[edited_quota_df["日期"] == str(d_int)]
+                    if _rq5.empty: continue
+                    try:
+                        _req_d5  = int(_rq5.iloc[0]["D班"])
+                        _req_128 = int(_rq5.iloc[0]["12-8"])
+                    except (KeyError, ValueError): continue
+                    # D 班扣1人後不能低於配額
+                    _cur_d5 = sum(1 for _i5 in ai_df.index
+                                  if isinstance(sched[_i5][d_int], str)
+                                  and sched[_i5][d_int].startswith("D")
+                                  and cache_title[_i5] not in NO_HOL_ADMIN)
+                    if _cur_d5 - 1 < _req_d5: continue
+                    # 12-8 當日配額仍有餘裕
+                    _cur_128_d5 = sum(1 for _i5 in ai_df.index if sched[_i5][d_int] == "12-8")
+                    if _cur_128_d5 >= _req_128: continue
+                    # 合法性（相鄰班別 + 連五上限）
+                    if not can_work_base(n_idx, "12-8", d_int, strict_wow=False): continue
+                    if not group_cap_ok(n_idx, "12-8", d_int, sched, cache_group5): continue
+                    # 執行置換
+                    sched[n_idx][d_int] = "12-8"
+                    _cur_ngt5 += 1
+                    _cur_128_5 += 1
+                    if _cur_128_5 >= _128_tgt5: break          # 此人 12-8 已達目標
+                    if _cur_ngt5 >= _s4_ceil5: break           # 此人夜班已到上限
 
             for idx in ai_df.index:
                 for d in range(1, month_days + 1):
