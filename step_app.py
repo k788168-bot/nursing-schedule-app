@@ -9,7 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.023"
+APP_VERSION = "1.024"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
 
@@ -2889,8 +2889,9 @@ if st.session_state.step >= 4:
                     sched = {i: [""] + list(sched_df.iloc[i, 1:].values) for i in range(len(ai_df))}
                     
                     cache_preg = {i: str(row.get("孕/育嬰免夜班", "")).strip() == "是" for i, row in ai_df.iterrows()}
-                    cache_night = {i: str(row.get("夜班資格", "")).strip() for i, row in ai_df.iterrows()}  # 空白 = 無夜班資格
-                    cache_pref = {i: str(row.get("包班意願", "")).strip() for i, row in ai_df.iterrows()}
+                    cache_night      = {i: str(row.get("夜班資格", "")).strip() for i, row in ai_df.iterrows()}  # 空白 = 無夜班資格
+                    cache_pref       = {i: str(row.get("包班意願", "")).strip() for i, row in ai_df.iterrows()}
+                    cache_pref_night = {i: str(row.get("偏好班別", "")).strip() for i, row in ai_df.iterrows()}  # E / N / 12-8 或空白
                     cache_title = {i: str(row.get("職稱", "")).strip() for i, row in ai_df.iterrows()}
                     cache_circ = {i: str(row.get("流動資格", "")).strip() == "是" for i, row in ai_df.iterrows()}
                     cache_leader_str = {i: str(row.get("控台資格", "")).strip() for i, row in ai_df.iterrows()}
@@ -3107,6 +3108,10 @@ if st.session_state.step >= 4:
                                         # 比例從 0（夜班最少/空格最多）到 1（全排滿），加分從 500萬 遞減到 0
                                         score += int((1.0 - _ratio4) * 5_000_000)
 
+                                        # ── 偏好班別加分 ──
+                                        if s_type == cache_pref_night.get(idx, ""):
+                                            score += 6_000_000  # 偏好班別：高於連班型態感知，低於控台優先
+
                                         # ── 連班型態感知：避免上一休一 ──
                                         _y4 = sched[idx][d_int - 1] if d_int > 1 else ""
                                         _t4 = sched[idx][d_int + 1] if d_int < month_days else ""
@@ -3304,6 +3309,8 @@ if st.session_state.step >= 4:
                                     if _ov_shift4 not in ("E", "N"): continue
                                     # ★ 保護：over 的班若為鎖定格（國定必上班別/公差/預白），不可移走
                                     if (_ov4, _d4) in _locked_set4: continue
+                                    # ★ 保護：over 的班若符合其偏好班別，不搬走（保留個人偏好）
+                                    if _ov_shift4 == cache_pref_night.get(_ov4, ""): continue
                                     if sched[_un4][_d4] not in ("", "上課"): continue
                                     # ★ 保護：under 的目標格若為鎖定格（上課日等），不可填入 E/N
                                     if (_un4, _d4) in _locked_set4: continue
@@ -3517,6 +3524,8 @@ if st.session_state.step >= 4:
                                     if _swapped4b: break
                                     if sched[_ov4b][_d4b] != "12-8": continue
                                     if (_ov4b, _d4b) in _locked_set4: continue
+                                    # ★ 保護：over 的 12-8 若符合其偏好班別，不搬走（保留個人偏好）
+                                    if cache_pref_night.get(_ov4b, "") == "12-8": continue
                                     if sched[_un4b][_d4b] not in ["", "上課"]: continue
                                     if (_un4b, _d4b) in _locked_set4: continue
                                     if not _can_12_8_nocheck4b(_un4b, _d4b): continue
