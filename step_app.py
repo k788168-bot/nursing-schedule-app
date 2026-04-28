@@ -5,13 +5,28 @@ import datetime
 import random
 import requests
 import io
+import os
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-APP_VERSION = "1.024"
+APP_VERSION = "1.030"
 
 st.set_page_config(page_title=f"層級式護理排班系統 v{APP_VERSION}", layout="wide")
+
+# ── 隱藏所有 Streamlit 預設 UI chrome（最早執行，確保優先生效）──────────────
+st.markdown("""
+<style>
+[data-testid="stSidebar"]        { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
+header[data-testid="stHeader"]   { display: none !important; height: 0 !important; }
+[data-testid="stDecoration"]     { display: none !important; height: 0 !important; }
+[data-testid="stToolbar"]        { display: none !important; height: 0 !important; }
+[data-testid="stStatusWidget"]   { display: none !important; }
+#MainMenu                        { display: none !important; }
+.stAppDeployButton               { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # ── 行政職稱常數 ──────────────────────────────────────────────
 # 只排白班（D）的職稱
@@ -26,6 +41,8 @@ PACK_MIN_SHIFTS = 15
 # --- 狀態初始化 ---
 if "step" not in st.session_state:
     st.session_state.step = 1
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "home"
 for key in ["base_sched", "pack_sched", "night_sched", "d_sched", "twelve_sched", "final_sched", "classified_sched", "ai_df", "custom_targets"]:
     if key not in st.session_state:
         st.session_state[key] = None
@@ -1151,49 +1168,441 @@ def make_sched_col_config(month_days):
         )
     return cfg
 
-# ── 側欄：存檔 / 載入進度 ────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 💾 存檔 / 載入進度")
+# ── 年度記錄工具：模組頂層定義（供兩處使用）────────────────────────────────
+_HISTORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.xlsx")
 
-    # ── 存檔區 ──
-    _cur_step = st.session_state.get("step", 1)
-    if _cur_step > 1:
-        _yr  = st.session_state.get("sel_year",  "")
-        _mo  = st.session_state.get("sel_month", "")
-        _fname = f"排班進度_{_yr}_{str(_mo).zfill(2)}.pkl" if (_yr and _mo) else "排班進度存檔.pkl"
-        st.download_button(
-            label=f"💾 下載目前進度（第 {_cur_step} 步）",
-            data=_make_checkpoint(),
-            file_name=_fname,
-            mime="application/octet-stream",
-            use_container_width=True,
-            help="將目前排班進度下載為 .pkl 檔案，稍後可重新載入繼續作業",
-        )
+def _load_history_df():
+    if os.path.exists(_HISTORY_PATH):
+        try:
+            return pd.read_excel(_HISTORY_PATH)
+        except Exception:
+            pass
+    return pd.DataFrame(columns=["年", "月", "姓名", "N班", "E班", "12-8班", "D班",
+                                 "總上班天數", "週末夜班", "假日前夜班"])
+
+def _save_history_df(df):
+    df.to_excel(_HISTORY_PATH, index=False)
+
+# ── 全域 CSS：隱藏 sidebar + sticky 導覽列 ──────────────────────────────────
+_GLOBAL_CSS = """
+<style>
+[data-testid="stSidebar"]        { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
+</style>
+"""
+
+def _show_navbar(page_title: str, show_save_load: bool = False):
+    """在每個子頁面頂端顯示 sticky 導覽列（純按鈕列），載入進度放在折疊區塊。"""
+    st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
+
+    # ── 導覽列本體（純按鈕，不放 file_uploader）──
+    if show_save_load:
+        nc1, nc2, nc3 = st.columns([1.2, 5.6, 1.2])
     else:
-        st.info("完成第一步後即可存檔", icon="ℹ️")
+        nc1, nc2 = st.columns([1.2, 6.8])
 
-    st.divider()
-
-    # ── 載入區 ──
-    st.markdown("**📂 載入已存進度**")
-    _uploaded_ckpt = st.file_uploader(
-        "選擇 .pkl 進度檔",
-        type=["pkl"],
-        key="checkpoint_uploader",
-        label_visibility="collapsed",
-        help="上傳之前下載的 .pkl 存檔，還原所有排班步驟與資料",
-    )
-    if _uploaded_ckpt is not None:
-        if st.button("✅ 套用進度", use_container_width=True, type="primary", key="btn_restore_ckpt"):
-            _restore_checkpoint(_uploaded_ckpt.read())
+    with nc1:
+        if st.button("🏠 首頁", use_container_width=True, key="navbar_home_btn"):
+            st.session_state.current_page = "home"
             st.rerun()
+    with nc2:
+        st.markdown(
+            f"<div style='line-height:2.2rem;font-weight:600;font-size:1rem'>{page_title}</div>",
+            unsafe_allow_html=True,
+        )
+    if show_save_load:
+        _cur_step_nb = st.session_state.get("step", 1)
+        _yr_nb = st.session_state.get("sel_year", "")
+        _mo_nb = st.session_state.get("sel_month", "")
+        _fname_nb = (f"排班進度_{_yr_nb}_{str(_mo_nb).zfill(2)}.pkl"
+                     if (_yr_nb and _mo_nb) else "排班進度存檔.pkl")
+        with nc3:
+            if _cur_step_nb > 1:
+                st.download_button(
+                    "💾 存檔",
+                    data=_make_checkpoint(),
+                    file_name=_fname_nb,
+                    mime="application/octet-motion",
+                    use_container_width=True,
+                    key="navbar_save_btn",
+                    help="下載目前排班進度，稍後可重新載入繼續作業",
+                )
+            else:
+                st.button("💾 存檔", disabled=True,
+                          use_container_width=True, key="navbar_save_dis")
 
-    st.divider()
-    st.caption("💡 建議每完成一個步驟就存一次，避免重新整理後資料遺失。")
+    # ── 載入進度：折疊區塊（僅排班頁面顯示，放在導覽列下方）──
+    if show_save_load:
+        with st.expander("📂 載入已存進度", expanded=False):
+            _nb_ckpt = st.file_uploader(
+                "選擇 .pkl 進度檔",
+                type=["pkl"],
+                key="navbar_ckpt_upload",
+                label_visibility="collapsed",
+            )
+            if _nb_ckpt is not None:
+                if st.button("✅ 套用進度", use_container_width=True,
+                             type="primary", key="navbar_restore_btn"):
+                    _restore_checkpoint(_nb_ckpt.read())
+                    st.rerun()
+            st.caption("💡 建議每完成一個步驟就存一次，避免重新整理後資料遺失。")
 
+
+# ── 首頁導航頁面 ──────────────────────────────────────────────────────────
+def _show_homepage():
+    st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;margin-top:2rem'>🏥 護理輔助排班工作站</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:gray;margin-bottom:2.5rem'>請選擇要使用的功能</p>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2, gap="large")
+    with col1:
+        with st.container(border=True):
+            st.markdown("### 🗓️ 排班系統")
+            st.markdown("七步驟引導式排班，自動分配夜班、白班、包班")
+            if st.button("進入排班系統", key="nav_scheduling", type="primary", use_container_width=True):
+                st.session_state.current_page = "scheduling"
+                st.rerun()
+        st.write("")
+        with st.container(border=True):
+            st.markdown("### 🔍 班表驗證")
+            st.markdown("上傳修改後的班表，即時檢查勞基法合規與公平性")
+            if st.button("進入班表驗證", key="nav_validator", use_container_width=True):
+                st.session_state.current_page = "validator"
+                st.rerun()
+    with col2:
+        with st.container(border=True):
+            st.markdown("### 📊 年度記錄")
+            st.markdown("匯入每月最終班表，追蹤全年各護師排班統計")
+            if st.button("進入年度記錄", key="nav_history", use_container_width=True):
+                st.session_state.current_page = "history"
+                st.rerun()
+        st.write("")
+        with st.container(border=True):
+            st.markdown("### ⏰ 加班線分配")
+            st.markdown("上傳班表自動分配白班加班線，並驗證四周變形工時")
+            if st.button("進入加班線分配", key="nav_overtime", use_container_width=True):
+                st.session_state.current_page = "overtime"
+                st.rerun()
+
+    st.write("")
+    if st.button("📖 使用說明 & 範例下載", use_container_width=True, key="nav_tutorial"):
+        st.session_state.current_page = "tutorial"
+        st.rerun()
+    st.caption(f"系統版本 v{APP_VERSION}　｜　層級式護理輔助排班工作站")
+
+# ── 護師名單範例 Excel 產生器 ──────────────────────────────────────────────
+def _build_sample_nurse_excel() -> bytes:
+    """產生護師名單範例 Excel，含欄位說明與假資料。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "護師名單範例"
+
+    thin = Border(
+        left=Side(style='thin', color='CCCCCC'), right=Side(style='thin', color='CCCCCC'),
+        top=Side(style='thin', color='CCCCCC'),  bottom=Side(style='thin', color='CCCCCC'),
+    )
+    hdr_fill_req = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")   # 必填：深藍
+    hdr_fill_opt = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")   # 選填：中藍
+    hdr_font     = Font(bold=True, color="FFFFFF", size=10)
+    center       = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # ── 欄位定義 ──
+    cols = [
+        # (欄名, 必填?, 說明, 範例值清單)
+        ("姓名",         True,  "護師姓名（唯一值，不可重複）",
+         ["王小明","李美玲","張志偉","陳雅婷","林建宏","吳淑芬","黃怡君","劉俊廷","蔡雨蓁","方宗翰"]),
+        ("職稱",         True,  "護理師 / 組長 / 護理長 / 副護理長 / 助理 / 傷兵",
+         ["護理師","護理師","護理師","組長","護理師","護理師","護理師","護理師","護理師","護理長"]),
+        ("夜班資格",     True,  "大夜 / 小夜 / 中班 / 空白（無夜班資格）",
+         ["大夜","小夜","中班","大夜","大夜","小夜","","大夜","小夜",""]),
+        ("孕/育嬰免夜班",False, "是 → 免排 E/N；空白或否 → 正常排班",
+         ["","","","","","是","","","",""]),
+        ("包班意願",     False, "固定排某班別：E / N / 12-8 / D；空白 = 系統自動分配",
+         ["","N","","","","","","","",""]),
+        ("偏好班別",     False, "優先排入的夜班：E / N / 12-8；空白 = 無偏好",
+         ["E","","12-8","N","","","","E","",""]),
+        ("流動資格",     False, "是 → 可擔任流動護師；空白或否 = 否",
+         ["是","","是","是","","","","","",""]),
+        ("控台資格",     False, "是 → 可擔任控台；空白或否 = 否",
+         ["","","","是","","","","","",""]),
+        ("組別",         False, "A / B；空白 = 不限組別",
+         ["A","B","A","A","B","B","A","B","A",""]),
+        ("上課日期",     False, "當月上課日（逗號分隔），如：3,15,22",
+         ["","","3,15","","","","","","",""]),
+    ]
+
+    # ── 第一列：欄位說明 ──
+    ws.row_dimensions[1].height = 40
+    for ci, (name, req, desc, _) in enumerate(cols, 1):
+        cell = ws.cell(row=1, column=ci, value=f"{'★必填' if req else '○選填'}\n{desc}")
+        cell.fill   = hdr_fill_req if req else hdr_fill_opt
+        cell.font   = Font(color="FFFFFF", size=9)
+        cell.alignment = center
+        cell.border = thin
+
+    # ── 第二列：欄位名稱（真正的 header）──
+    ws.row_dimensions[2].height = 22
+    for ci, (name, req, _, _v) in enumerate(cols, 1):
+        cell = ws.cell(row=2, column=ci, value=name)
+        cell.fill   = hdr_fill_req if req else hdr_fill_opt
+        cell.font   = hdr_font
+        cell.alignment = center
+        cell.border = thin
+
+    # ── 第三列以下：範例資料 ──
+    data_fill_even = PatternFill(start_color="EBF3FB", end_color="EBF3FB", fill_type="solid")
+    for ri, row_idx in enumerate(range(10)):
+        ws.row_dimensions[ri + 3].height = 18
+        for ci, (_, _, _, vals) in enumerate(cols, 1):
+            cell = ws.cell(row=ri + 3, column=ci, value=vals[row_idx])
+            cell.alignment = center
+            cell.border = thin
+            if ri % 2 == 1:
+                cell.fill = data_fill_even
+
+    # ── 欄寬 ──
+    col_widths = [12, 14, 14, 18, 12, 12, 12, 12, 8, 18]
+    for ci, w in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=ci).column_letter].width = w
+
+    ws.freeze_panes = "A3"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ── 使用說明頁面 ────────────────────────────────────────────────────────────
+def _show_tutorial_page():
+    _show_navbar("📖 使用說明")
     st.divider()
-    st.markdown("## 🔍 班表驗證站")
+
+    st.markdown("## 📥 下載說明文件")
+    st.markdown("以下兩份檔案可協助您快速上手本系統，下載後即可離線閱讀或填寫。")
+
+    st.markdown("---")
+
+    # ── 使用說明手冊 ──
+    col1, col2 = st.columns([2, 5])
+    with col1:
+        _docx_path = os.path.join(os.path.dirname(__file__), "使用說明手冊.docx")
+        if os.path.exists(_docx_path):
+            with open(_docx_path, "rb") as _f:
+                st.download_button(
+                    label="⬇️ 下載使用說明手冊（Word）",
+                    data=_f.read(),
+                    file_name="排班系統使用說明手冊.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary",
+                    use_container_width=True,
+                )
+        else:
+            st.warning("使用說明手冊尚未產生，請聯繫系統管理員。")
+    with col2:
+        st.info("完整操作手冊（Word 格式），包含 Step 1–7 詳細說明、子系統介紹、Excel 欄位規範，以及常見問題解答。")
+
+    st.markdown("---")
+
+    # ── 護師名單範例 Excel ──
+    col3, col4 = st.columns([2, 5])
+    with col3:
+        st.download_button(
+            label="⬇️ 下載護師名單範例（Excel）",
+            data=_build_sample_nurse_excel(),
+            file_name="護師名單範例.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="secondary",
+            use_container_width=True,
+        )
+    with col4:
+        st.info("10 位示範護師的名單範本。**深藍欄位**為必填，**淺藍欄位**為選填。下載後照格式填入真實人員資料，於排班系統第二步上傳即可。")
+
+    st.markdown("---")
+    st.caption(f"系統版本 v{APP_VERSION}　｜　如有問題請聯繫系統管理員")
+
+
+# ── 年度記錄頁面 ──────────────────────────────────────────────────────────
+def _show_history_page():
+    _show_navbar("📊 年度排班記錄")
+    st.caption("上傳人工修改後的最終班表，記錄各護師全年排班統計")
+    st.divider()
+
+    # ── 年月選擇 ──
+    _h_col1, _h_col2 = st.columns(2)
+    _cur_yr = datetime.date.today().year
+    with _h_col1:
+        _hist_year  = st.selectbox("年份", list(range(_cur_yr - 2, _cur_yr + 2)),
+                                   index=2, key="hist_year")
+    with _h_col2:
+        _hist_month = st.selectbox("月份", list(range(1, 13)),
+                                   index=datetime.date.today().month - 1, key="hist_month")
+
+    _hist_file = st.file_uploader("上傳最終班表 Excel", type=["xlsx"], key="history_upload")
+
+    if _hist_file:
+        try:
+            _hist_raw = pd.read_excel(_hist_file, sheet_name=0, header=None)
+
+            # 找 header 行（含「姓名」）
+            _hist_hdr_row = None
+            for _hri in range(min(5, len(_hist_raw))):
+                if "姓名" in [str(v).strip() for v in _hist_raw.iloc[_hri].values]:
+                    _hist_hdr_row = _hri
+                    break
+
+            if _hist_hdr_row is None:
+                st.error("找不到「姓名」欄，請確認班表格式正確")
+            else:
+                _hist_hdr = [str(v).strip() for v in _hist_raw.iloc[_hist_hdr_row].values]
+                _hist_name_ci = _hist_hdr.index("姓名")
+
+                # 找日期欄（純數字）
+                _hist_day_cols = []
+                for _hci, _hcv in enumerate(_hist_hdr):
+                    try:
+                        _hist_day_cols.append((_hci, int(float(_hcv))))
+                    except Exception:
+                        pass
+
+                # 跨月分界處理（取本月欄位）
+                _hist_days_seq = [d for _, d in _hist_day_cols]
+                _hist_split = None
+                for _hsi in range(1, len(_hist_days_seq)):
+                    if _hist_days_seq[_hsi] < _hist_days_seq[_hsi - 1] and _hist_days_seq[_hsi] <= 5:
+                        _hist_split = _hsi
+                        break
+                _hist_this_month = _hist_day_cols[_hist_split:] if _hist_split else _hist_day_cols
+                _hist_md = calendar.monthrange(_hist_year, _hist_month)[1]
+                _hist_col_to_day = {ci: d for ci, d in _hist_this_month if 1 <= d <= _hist_md}
+
+                # 建立 護師 → {日: 班別} 映射
+                _hist_nurse_data = {}
+                for _hri2 in range(_hist_hdr_row + 1, len(_hist_raw)):
+                    _hvn = str(_hist_raw.iloc[_hri2, _hist_name_ci]).strip()
+                    if not _hvn or _hvn in ("nan", "NaN", "None", "姓名"):
+                        continue
+                    try:
+                        float(_hvn)
+                        continue  # 跳過統計行
+                    except Exception:
+                        pass
+                    _hist_nurse_data[_hvn] = {}
+                    for _hci2, _hd in _hist_col_to_day.items():
+                        _hv = str(_hist_raw.iloc[_hri2, _hci2]).strip()
+                        _hist_nurse_data[_hvn][_hd] = "" if _hv in ("nan", "NaN", "None") else _hv
+
+                # 偵測國定假日：該欄超過半數格子含「國定」或「國」
+                _hist_nat_days = set()
+                for _hci3, _hd3 in _hist_col_to_day.items():
+                    _nat_cnt, _tot_cnt = 0, 0
+                    for _hri3 in range(_hist_hdr_row + 1, len(_hist_raw)):
+                        _hvn3 = str(_hist_raw.iloc[_hri3, _hist_name_ci]).strip()
+                        if not _hvn3 or _hvn3 in ("nan", "NaN", "None"):
+                            continue
+                        try:
+                            float(_hvn3)
+                            continue
+                        except Exception:
+                            pass
+                        _tot_cnt += 1
+                        if str(_hist_raw.iloc[_hri3, _hci3]).strip() in ("國定", "國", "H"):
+                            _nat_cnt += 1
+                    if _tot_cnt > 0 and _nat_cnt / _tot_cnt >= 0.5:
+                        _hist_nat_days.add(_hd3)
+
+                # 假日前一天
+                _hist_pre_hol = {d - 1 for d in _hist_nat_days if d > 1}
+
+                # 週末日（週六＝5, 週日＝6）
+                _hist_weekend = {
+                    d for d in range(1, _hist_md + 1)
+                    if datetime.date(_hist_year, _hist_month, d).weekday() in (5, 6)
+                }
+
+                _HIST_NIGHT = {"N", "E", "12-8"}
+
+                def _hist_is_work(v):
+                    v = str(v).strip().upper()
+                    return v.startswith("D") or v in ("E", "N", "12-8")
+
+                # 計算各護師統計
+                _hist_rows = []
+                for _hnm, _hdays in _hist_nurse_data.items():
+                    _hist_rows.append({
+                        "年":       _hist_year,
+                        "月":       _hist_month,
+                        "姓名":     _hnm,
+                        "N班":      sum(1 for v in _hdays.values() if v == "N"),
+                        "E班":      sum(1 for v in _hdays.values() if v == "E"),
+                        "12-8班":   sum(1 for v in _hdays.values() if v == "12-8"),
+                        "D班":      sum(1 for v in _hdays.values() if str(v).upper().startswith("D")),
+                        "總上班天數": sum(1 for v in _hdays.values() if _hist_is_work(v)),
+                        "週末夜班":  sum(1 for d, v in _hdays.items()
+                                       if v in _HIST_NIGHT and d in _hist_weekend),
+                        "假日前夜班": sum(1 for d, v in _hdays.items()
+                                        if v in _HIST_NIGHT and d in _hist_pre_hol),
+                    })
+
+                if _hist_rows:
+                    _hist_preview_df = pd.DataFrame(_hist_rows)
+                    st.markdown(f"**預覽：{_hist_year}/{_hist_month:02d}，共 {len(_hist_rows)} 位人員**")
+                    st.dataframe(_hist_preview_df, use_container_width=True, hide_index=True)
+
+                    if st.button("✅ 儲存至年度記錄", type="primary",
+                                 use_container_width=True, key="btn_save_history"):
+                        _existing_h = _load_history_df()
+                        # 同月份已有紀錄則覆蓋
+                        _existing_h = _existing_h[
+                            ~((_existing_h["年"] == _hist_year) &
+                              (_existing_h["月"] == _hist_month))
+                        ]
+                        _combined_h = pd.concat([_existing_h, _hist_preview_df],
+                                                ignore_index=True)
+                        _combined_h = _combined_h.sort_values(
+                            ["年", "月", "姓名"]).reset_index(drop=True)
+                        _save_history_df(_combined_h)
+                        st.success(f"✅ {_hist_year}/{_hist_month:02d} 已儲存（{len(_hist_rows)} 位人員）")
+                else:
+                    st.warning("未偵測到有效護師資料，請確認班表格式")
+        except Exception as _hist_err:
+            st.error(f"讀取失敗：{_hist_err}")
+
+    # ── 查看年度記錄 ──
+    _hist_view_df = _load_history_df()
+    if not _hist_view_df.empty:
+        st.markdown("---")
+        st.markdown("**📋 年度記錄總覽**")
+
+        # 下載按鈕
+        _hist_dl_buf = io.BytesIO()
+        _hist_view_df.to_excel(_hist_dl_buf, index=False)
+        _hist_dl_buf.seek(0)
+        st.download_button(
+            "📥 下載年度記錄 Excel",
+            data=_hist_dl_buf.getvalue(),
+            file_name="年度排班記錄.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="hist_dl_btn",
+        )
+
+        # 篩選護師
+        _hist_all_names = sorted(_hist_view_df["姓名"].unique().tolist())
+        _hist_sel = st.selectbox("篩選護師", ["（全部）"] + _hist_all_names,
+                                 key="hist_nurse_filter")
+        _hist_show = (_hist_view_df if _hist_sel == "（全部）"
+                      else _hist_view_df[_hist_view_df["姓名"] == _hist_sel])
+        st.dataframe(_hist_show, use_container_width=True, hide_index=True)
+
+# ── 班表驗證頁面 ──────────────────────────────────────────────────────────
+def _show_validator_page():
+    _show_navbar("🔍 班表驗證站")
     st.caption("上傳手動微調後的班表 Excel，秒速檢查勞基法與人力安全")
+    st.divider()
+
     _val_file = st.file_uploader(
         "上傳微調後的班表 Excel", type=["xlsx"], key="validator_upload"
     )
@@ -1476,9 +1885,12 @@ with st.sidebar:
         except Exception as _e:
             st.error(f"解析失敗：{_e}，請確認上傳的班表格式與系統輸出的 Excel 格式一致")
 
-    st.divider()
-    st.markdown("## 📊 加班線分配 + 變形工時審查")
+# ── 加班線分配頁面 ────────────────────────────────────────────────────────
+def _show_overtime_page():
+    _show_navbar("⏰ 加班線分配＋變形工時審查")
     st.caption("上傳已排好班別的班表，系統自動分配白班加班線並驗證四周變形工時，不更動任何班別。")
+    st.divider()
+
     _ot_file = st.file_uploader("上傳班表 Excel（D/E/N/12-8 已排好）", type=["xlsx"], key="ot_upload")
     if _ot_file:
         try:
@@ -1672,7 +2084,29 @@ with st.sidebar:
         except Exception as _e_ot:
             st.error(f"處理失敗：{_e_ot}，請確認班表格式（第一欄為姓名，之後為1~{st.session_state.get('month_days',31)}日）")
 
-st.title("🏥 層級式護理輔助排班工作站")
+# sidebar 已透過 CSS 隱藏，此處保留空 block 避免 Streamlit 警告
+with st.sidebar:
+    pass
+
+# ── 頁面路由 ──────────────────────────────────────────────────
+if st.session_state.current_page == "home":
+    _show_homepage()
+    st.stop()
+elif st.session_state.current_page == "history":
+    _show_history_page()
+    st.stop()
+elif st.session_state.current_page == "validator":
+    _show_validator_page()
+    st.stop()
+elif st.session_state.current_page == "overtime":
+    _show_overtime_page()
+    st.stop()
+elif st.session_state.current_page == "tutorial":
+    _show_tutorial_page()
+    st.stop()
+# current_page == "scheduling" → 繼續執行以下排班系統主流程
+
+_show_navbar("🗓️ 層級式護理輔助排班工作站", show_save_load=True)
 st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.session_state.step} 步 / 共 7 步")
 
 weekday_names_list = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
@@ -1841,8 +2275,12 @@ if st.session_state.step >= 2:
             if "姓名" not in ai_df.columns:
                 st.error("❌ 找不到「姓名」欄位，請確認上傳的 Excel 格式正確（使用官方範本）。")
                 st.stop()
+            # ── 每次上傳新 Excel 都強制重算底稿，確保預休/長假的 O 標記不過舊 ──
+            if st.session_state.get("_last_uploaded_ai") != uploaded_ai.name:
+                st.session_state["_last_uploaded_ai"] = uploaded_ai.name
+                st.session_state.base_sched = None  # 強制重算，清除舊快取
             st.session_state.ai_df = ai_df
-            
+
             all_skills = set()
             for idx, row in ai_df.iterrows():
                 for s in str(row.get("次專科能力", "")).split(","):
@@ -1887,21 +2325,37 @@ if st.session_state.step >= 2:
                         sched[idx][d_int] = "O"
                         pre_type_map[(idx, d_int)] = "預長假"
 
+                # ── 特殊假別：格式「喪假:24,28,29,30」或「婚假:16,17,18」或「產檢:22」──
+                # 修正：原程式誤用 "d:label" 格式解析，實際格式為 "label:d1,d2,…"
                 sp_leave_str = str(row.get("特殊假別", "")).strip()
-                if sp_leave_str:
-                    for item in sp_leave_str.split(","):
-                        if ":" in item or "-" in item:
-                            delim = ":" if ":" in item else "-"
-                            d_v, l_v = item.split(delim)[0].strip(), item.split(delim)[1].strip()
-                            if d_v.isdigit() and 1 <= int(d_v) <= st.session_state.month_days:
-                                sched[idx][int(d_v)] = l_v
+                if sp_leave_str and sp_leave_str != 'nan':
+                    _sp_cur_lbl = "特殊假"
+                    for _sp_part in sp_leave_str.split(","):
+                        _sp_part = _sp_part.strip()
+                        if not _sp_part:
+                            continue
+                        if ":" in _sp_part:  # "喪假:24" → label=喪假, day=24
+                            _sp_lbl, _sp_day_s = _sp_part.split(":", 1)
+                            _sp_cur_lbl = _sp_lbl.strip() or _sp_cur_lbl
+                            _sp_part = _sp_day_s.strip()
+                        try:
+                            _sp_d = int(float(_sp_part))
+                            if 1 <= _sp_d <= st.session_state.month_days and sched[idx][_sp_d] == "":
+                                sched[idx][_sp_d] = "O"  # 特殊假別均視為休假（O）
+                        except ValueError:
+                            pass
 
                 # ── 公差日期（優先於預白日期填入）────────────────────────
+                # 修正：Excel 可能存成 float（"26.0"），isdigit() 會回 False
                 gongcha_str = str(row.get("公差日期", "")).strip()
-                if gongcha_str:
-                    for d_v in [s.strip() for s in gongcha_str.split(",") if s.strip().isdigit()]:
-                        if 1 <= int(d_v) <= st.session_state.month_days and sched[idx][int(d_v)] == "":
-                            sched[idx][int(d_v)] = "公差"
+                if gongcha_str and gongcha_str != 'nan':
+                    for _gc_s in gongcha_str.split(","):
+                        try:
+                            _gc_d = int(float(_gc_s.strip()))
+                            if 1 <= _gc_d <= st.session_state.month_days and sched[idx][_gc_d] == "":
+                                sched[idx][_gc_d] = "公差"
+                        except ValueError:
+                            pass
 
                 rtd = str(row.get("預白日期", "")).strip()
                 if rtd:
@@ -1910,30 +2364,37 @@ if st.session_state.step >= 2:
                             sched[idx][int(d_v)] = "D"
                             pre_type_map[(idx, int(d_v))] = "預白"
 
-                # ── 上課日期：以包班班別填入（大夜→N，小夜→E，其他→D）──────
-                # D加班線僅可在第8天以後；初始化一律填基本班別
+                # ── 上課日期：非包班護理師標記為「上課」；大夜包班仍填 N ──────
+                # 修正：原版所有人一律填 D/N，導致 Step 6 加班線把上課日改寫成 D8/D9
                 class_str = str(row.get("上課日期", "")).strip()
-                if class_str:
+                if class_str and class_str != 'nan':
                     _pref_cls = str(row.get("包班意願", "")).strip()
-                    if "大夜" in _pref_cls:
-                        _class_shift = "N"
-                    else:
-                        # 上課日不可排E班或12-8班，小夜包班亦改填D
-                        _class_shift = "D"
-                    for d_v in [s.strip() for s in class_str.split(",") if s.strip().isdigit()]:
-                        d_int_cls = int(d_v)
-                        # 預休日期優先於上課日期：格子非空時不覆蓋
+                    for _cls_s in class_str.split(","):
+                        try:
+                            d_int_cls = int(float(_cls_s.strip()))
+                        except ValueError:
+                            continue
                         if 1 <= d_int_cls <= st.session_state.month_days and sched[idx][d_int_cls] == "":
-                            sched[idx][d_int_cls] = _class_shift
-                            
+                            if "大夜" in _pref_cls:
+                                sched[idx][d_int_cls] = "N"   # 大夜包班：上課日仍上大夜班
+                            elif _pref_cls:
+                                sched[idx][d_int_cls] = "D"   # 其他包班（中班/小夜包班等）
+                            else:
+                                sched[idx][d_int_cls] = "上課" # 非包班：標記為上課，不可被排夜班或加班線
+
+                # ── 國定假日必上班別：格式「19D,20E,21E」（日期+班別直接連寫，無分隔符）──
+                # 修正：原程式只處理含 ":" 或 "-" 的格式，實際格式為純數字+班別字母
+                import re as _re
                 mand_holiday_str = str(row.get("國定假日必上班別", "")).strip()
-                if mand_holiday_str:
-                    for item in mand_holiday_str.split(","):
-                        if ":" in item or "-" in item:
-                            delim = ":" if ":" in item else "-"
-                            d_v, s_v = item.split(delim)[0].strip(), item.split(delim)[1].strip()
-                            if d_v.isdigit() and 1 <= int(d_v) <= st.session_state.month_days: 
-                                sched[idx][int(d_v)] = s_v.upper()
+                if mand_holiday_str and mand_holiday_str != 'nan':
+                    for _mh_item in mand_holiday_str.split(","):
+                        _mh_item = _mh_item.strip()
+                        _mh_m = _re.match(r'^(\d+)([A-Za-z0-9\-]+)$', _mh_item)
+                        if _mh_m:
+                            _mh_d = int(_mh_m.group(1))
+                            _mh_s = _mh_m.group(2).upper()
+                            if 1 <= _mh_d <= st.session_state.month_days:
+                                sched[idx][_mh_d] = _mh_s
             
             # 僅在首次（base_sched 尚未建立）時計算底稿，避免覆蓋手動修改
             if st.session_state.base_sched is None:
@@ -2272,33 +2733,61 @@ if st.session_state.step >= 3:
                         nat_list3 = st.session_state.nat_holidays_list
                         illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
-                        # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
+                        # ── 第三步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期 / 預休 / 長假）──
                         # 均等化互換時，這些格的班別不可被移走
                         _prewhite_set3: set = set()
                         _mand_hol_set3: set = set()
                         _gongcha_set3:  set = set()
                         _class_set3:    set = set()
+                        _preoff_set3:   set = set()  # 預休 + 長假 + 特殊假別 硬保護
+                        import re as _re3
                         for _pi3, _pr3 in ai_df.iterrows():
                             for _dv3 in str(_pr3.get("預白日期", "")).split(","):
                                 if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
                                     _prewhite_set3.add((_pi3, int(_dv3.strip())))
-                            for _item3 in str(_pr3.get("國定假日必上班別", "")).split(","):
-                                for _delim3 in [":", "-"]:
-                                    if _delim3 in _item3:
-                                        _dvx3, _svx3 = _item3.split(_delim3, 1)
-                                        if _dvx3.strip().isdigit() and 1 <= int(_dvx3.strip()) <= month_days:
-                                            _mand_hol_set3.add((_pi3, int(_dvx3.strip())))
-                                        break
+                            # 國定假日必上班別：格式「19D,20E」→ 用 regex 解析
+                            for _mh3 in str(_pr3.get("國定假日必上班別", "")).split(","):
+                                _mh3 = _mh3.strip()
+                                _mhm3 = _re3.match(r'^(\d+)[A-Za-z0-9\-]+$', _mh3)
+                                if _mhm3 and 1 <= int(_mhm3.group(1)) <= month_days:
+                                    _mand_hol_set3.add((_pi3, int(_mhm3.group(1))))
+                            # 公差日期：處理 float（"26.0"）
                             for _dv3 in str(_pr3.get("公差日期", "")).split(","):
-                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
-                                    _gongcha_set3.add((_pi3, int(_dv3.strip())))
+                                try:
+                                    _d3 = int(float(_dv3.strip()))
+                                    if 1 <= _d3 <= month_days: _gongcha_set3.add((_pi3, _d3))
+                                except ValueError: pass
                             for _dv3 in str(_pr3.get("上課日期", "")).split(","):
                                 if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
                                     _class_set3.add((_pi3, int(_dv3.strip())))
-                        _locked_set3 = _prewhite_set3 | _mand_hol_set3 | _gongcha_set3 | _class_set3
+                            for _dv3 in str(_pr3.get("預休日期", "")).split(","):
+                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
+                                    _preoff_set3.add((_pi3, int(_dv3.strip())))
+                                    sched[_pi3][int(_dv3.strip())] = "O"
+                            for _dv3 in str(_pr3.get("預約長假日期", "")).split(","):
+                                if _dv3.strip().isdigit() and 1 <= int(_dv3.strip()) <= month_days:
+                                    _preoff_set3.add((_pi3, int(_dv3.strip())))
+                                    sched[_pi3][int(_dv3.strip())] = "O"
+                            # 特殊假別（喪假/婚假/產檢等）→ 加入硬保護，確保 O 標記
+                            _sp3_str = str(_pr3.get("特殊假別", "")).strip()
+                            if _sp3_str and _sp3_str != 'nan':
+                                for _sp3_part in _sp3_str.split(","):
+                                    _sp3_part = _sp3_part.strip()
+                                    if ":" in _sp3_part:
+                                        _sp3_part = _sp3_part.split(":", 1)[1].strip()
+                                    try:
+                                        _sp3_d = int(float(_sp3_part))
+                                        if 1 <= _sp3_d <= month_days:
+                                            _preoff_set3.add((_pi3, _sp3_d))
+                                            if sched[_pi3][_sp3_d] == "":
+                                                sched[_pi3][_sp3_d] = "O"
+                                    except ValueError: pass
+                        _locked_set3 = _prewhite_set3 | _mand_hol_set3 | _gongcha_set3 | _class_set3 | _preoff_set3
 
                         def can_work_base(n_idx, s, d_int):
                             if sched[n_idx][d_int] not in ["", "上課"]: return False
+                            # 上課日（非包班護理師）：不可排入任何班別（顯示為「上課」）
+                            if sched[n_idx][d_int] == "上課" and cache_pref[n_idx] == "": return False
                             # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                             if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat3, cache_can_sun3, cache_can_nat3, sat_list3, sun_list3, nat_list3): return False
                             # 上課日不得排 E 或 12-8（適用所有護理師，包班亦同）
@@ -2933,33 +3422,63 @@ if st.session_state.step >= 4:
 
                     illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
-                    # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期）──────────────
+                    # ── 第四步鎖定格集合（預白班 / 公差 / 國定必上班別 / 上課日期 / 預休 / 長假）──
                     # E/N 均等化互換時，這些格的班別不可被移走
                     _prewhite_set4: set = set()
                     _mand_hol_set4: set = set()
                     _gongcha_set4:  set = set()
                     _class_set4:    set = set()
+                    _preoff_set4:   set = set()  # 預休 + 長假 + 特殊假別 硬保護
+                    import re as _re4
                     for _pi4, _pr4 in ai_df.iterrows():
                         for _dv4 in str(_pr4.get("預白日期", "")).split(","):
                             if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
                                 _prewhite_set4.add((_pi4, int(_dv4.strip())))
-                        for _item4 in str(_pr4.get("國定假日必上班別", "")).split(","):
-                            for _delim4 in [":", "-"]:
-                                if _delim4 in _item4:
-                                    _dvx4, _svx4 = _item4.split(_delim4, 1)
-                                    if _dvx4.strip().isdigit() and 1 <= int(_dvx4.strip()) <= month_days:
-                                        _mand_hol_set4.add((_pi4, int(_dvx4.strip())))
-                                    break
+                        # 國定假日必上班別：格式「19D,20E」→ regex 解析
+                        for _mh4 in str(_pr4.get("國定假日必上班別", "")).split(","):
+                            _mh4 = _mh4.strip()
+                            _mhm4 = _re4.match(r'^(\d+)[A-Za-z0-9\-]+$', _mh4)
+                            if _mhm4 and 1 <= int(_mhm4.group(1)) <= month_days:
+                                _mand_hol_set4.add((_pi4, int(_mhm4.group(1))))
+                        # 公差日期：處理 float（"26.0"）
                         for _dv4 in str(_pr4.get("公差日期", "")).split(","):
-                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
-                                _gongcha_set4.add((_pi4, int(_dv4.strip())))
+                            try:
+                                _d4 = int(float(_dv4.strip()))
+                                if 1 <= _d4 <= month_days: _gongcha_set4.add((_pi4, _d4))
+                            except ValueError: pass
                         for _dv4 in str(_pr4.get("上課日期", "")).split(","):
                             if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
                                 _class_set4.add((_pi4, int(_dv4.strip())))
-                    _locked_set4 = _prewhite_set4 | _mand_hol_set4 | _gongcha_set4 | _class_set4
+                        for _dv4 in str(_pr4.get("預休日期", "")).split(","):
+                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
+                                _preoff_set4.add((_pi4, int(_dv4.strip())))
+                                if sched[_pi4][int(_dv4.strip())] == "":
+                                    sched[_pi4][int(_dv4.strip())] = "O"
+                        for _dv4 in str(_pr4.get("預約長假日期", "")).split(","):
+                            if _dv4.strip().isdigit() and 1 <= int(_dv4.strip()) <= month_days:
+                                _preoff_set4.add((_pi4, int(_dv4.strip())))
+                                if sched[_pi4][int(_dv4.strip())] == "":
+                                    sched[_pi4][int(_dv4.strip())] = "O"
+                        # 特殊假別（喪假/婚假/產檢等）→ 加入硬保護
+                        _sp4_str = str(_pr4.get("特殊假別", "")).strip()
+                        if _sp4_str and _sp4_str != 'nan':
+                            for _sp4_part in _sp4_str.split(","):
+                                _sp4_part = _sp4_part.strip()
+                                if ":" in _sp4_part:
+                                    _sp4_part = _sp4_part.split(":", 1)[1].strip()
+                                try:
+                                    _sp4_d = int(float(_sp4_part))
+                                    if 1 <= _sp4_d <= month_days:
+                                        _preoff_set4.add((_pi4, _sp4_d))
+                                        if sched[_pi4][_sp4_d] == "":
+                                            sched[_pi4][_sp4_d] = "O"
+                                except ValueError: pass
+                    _locked_set4 = _prewhite_set4 | _mand_hol_set4 | _gongcha_set4 | _class_set4 | _preoff_set4
 
                     def can_work_base(n_idx, s, d_int, strict_wow=True):
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
+                        # 上課日（非包班護理師）：不可排入任何班別
+                        if sched[n_idx][d_int] == "上課" and cache_pref[n_idx] == "": return False
                         # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
                         if cache_pref[n_idx] == "" and not can_work_holiday_check(n_idx, d_int, cache_can_sat4, cache_can_sun4, cache_can_nat4, sat_list4, sun_list4, nat_list4): return False
                         if cache_preg[n_idx] and s in ("E", "N"): return False  # 母性保護僅禁 E/N；12-8 仍可排
@@ -3402,12 +3921,14 @@ if st.session_state.step >= 4:
                     target_12_8_s4 = remaining_12_8_s4 // len(elig_12_8_s4) if elig_12_8_s4 else 0
 
                     # E+N+12-8 夜班均等池（差距 ≤ 1）
-                    # 排除：包班意願不為空、職稱為「組長」；必須具夜班資格
+                    # 排除：包班意願不為空、行政職稱、夜班資格為空或「無」、母性保護（孕/育嬰免夜班）
+                    # 注意："無" != "" 所以必須明確排除，否則 min=0 的無夜班護理師會使均等化立刻中斷
                     elig_night_s4 = [
                         i for i in ai_df.index
                         if cache_pref[i] == ""
-                        and cache_title[i] != "組長"
-                        and cache_night[i] != ""
+                        and cache_title[i] not in ADMIN_TITLES
+                        and cache_night[i] not in ("", "無")   # 修正：排除「無夜班資格」護理師（原 != "" 漏掉"無"）
+                        and not cache_preg[i]                  # 修正：排除母性保護（其12-8受特殊規則保護，不納入均等化）
                     ]
                     _already_night_s4 = sum(
                         sum(1 for v in sched[i] if v in ("E", "N", "12-8"))
@@ -3556,7 +4077,7 @@ if st.session_state.step >= 4:
                             break  # 找不到可交換組合，停止
 
                     # ── 統一後處理均等化（E+N+12-8 全班種可互換，差距 ≤ 1）──────────────
-                    # 對象：elig_night_s4（大夜＋小夜＋中班，非包班，非組長）
+                    # 對象：elig_night_s4（大夜＋小夜＋中班，非包班，非行政，非無夜班資格，非母性保護）
                     # 邏輯：找出 E/N/12-8 合計最多(over)與最少(under)的護理師，
                     #       嘗試把 over 在某天的夜班直接交給 under（含鄰班/連五/資格驗證）
                     # 策略一（優先）：四格互換 over[X]→"", over[Y]→D; under[X]→夜班, under[Y]→""
@@ -3838,32 +4359,64 @@ if st.session_state.step >= 5:
             # 這些班次由護理長在 Excel 中預先指定，均等化互換時絕對不可移動
             _prewhite_set5: set = set()   # (idx, day) → 預白班
             _mand_hol_set5: set = set()   # (idx, day) → 國定假日必上班別
-            _gongcha_set5:  set = set()   # (idx, day) → 公差（已存為 "公差"，但保留集合供一致性檢查）
+            _gongcha_set5:  set = set()   # (idx, day) → 公差
             _class_set5:    set = set()   # (idx, day) → 上課日期
+            _preoff_set5:   set = set()   # (idx, day) → 預休 + 長假 + 特殊假別 硬保護
+            import re as _re5
             for _pi5, _pr5 in ai_df.iterrows():
                 for _dv in str(_pr5.get("預白日期", "")).split(","):
                     if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
                         _prewhite_set5.add((_pi5, int(_dv.strip())))
-                for _item in str(_pr5.get("國定假日必上班別", "")).split(","):
-                    for _delim in [":", "-"]:
-                        if _delim in _item:
-                            _dv = _item.split(_delim)[0].strip()
-                            if _dv.isdigit() and 1 <= int(_dv) <= month_days:
-                                _mand_hol_set5.add((_pi5, int(_dv)))
-                            break
+                # 國定假日必上班別：格式「19D,20E」→ regex 解析
+                for _mh5 in str(_pr5.get("國定假日必上班別", "")).split(","):
+                    _mh5 = _mh5.strip()
+                    _mhm5 = _re5.match(r'^(\d+)[A-Za-z0-9\-]+$', _mh5)
+                    if _mhm5 and 1 <= int(_mhm5.group(1)) <= month_days:
+                        _mand_hol_set5.add((_pi5, int(_mhm5.group(1))))
+                # 公差日期：處理 float（"26.0"）
                 for _dv in str(_pr5.get("公差日期", "")).split(","):
-                    if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
-                        _gongcha_set5.add((_pi5, int(_dv.strip())))
+                    try:
+                        _d5 = int(float(_dv.strip()))
+                        if 1 <= _d5 <= month_days: _gongcha_set5.add((_pi5, _d5))
+                    except ValueError: pass
                 for _dv in str(_pr5.get("上課日期", "")).split(","):
                     if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
                         _class_set5.add((_pi5, int(_dv.strip())))
+                for _dv in str(_pr5.get("預休日期", "")).split(","):
+                    if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
+                        _preoff_set5.add((_pi5, int(_dv.strip())))
+                        if sched[_pi5][int(_dv.strip())] == "":
+                            sched[_pi5][int(_dv.strip())] = "O"
+                for _dv in str(_pr5.get("預約長假日期", "")).split(","):
+                    if _dv.strip().isdigit() and 1 <= int(_dv.strip()) <= month_days:
+                        _preoff_set5.add((_pi5, int(_dv.strip())))
+                        if sched[_pi5][int(_dv.strip())] == "":
+                            sched[_pi5][int(_dv.strip())] = "O"
+                # 特殊假別（喪假/婚假/產檢等）→ 加入硬保護
+                _sp5_str = str(_pr5.get("特殊假別", "")).strip()
+                if _sp5_str and _sp5_str != 'nan':
+                    for _sp5_part in _sp5_str.split(","):
+                        _sp5_part = _sp5_part.strip()
+                        if ":" in _sp5_part:
+                            _sp5_part = _sp5_part.split(":", 1)[1].strip()
+                        try:
+                            _sp5_d = int(float(_sp5_part))
+                            if 1 <= _sp5_d <= month_days:
+                                _preoff_set5.add((_pi5, _sp5_d))
+                                if sched[_pi5][_sp5_d] == "":
+                                    sched[_pi5][_sp5_d] = "O"
+                        except ValueError: pass
             # 統合保護集合：均等化互換時，這些 (人員, 日期) 組合的班次不可被移動
-            _locked_set5 = _prewhite_set5 | _mand_hol_set5 | _gongcha_set5 | _class_set5
+            _locked_set5 = _prewhite_set5 | _mand_hol_set5 | _gongcha_set5 | _class_set5 | _preoff_set5
 
             illegal_next = {"D": ["N"], "E": ["D", "N", "12-8"], "12-8": ["N"], "N": []}
 
             def can_work_base(n_idx, s, d_int, strict_wow=True, week_variety_override=False):
                 if sched[n_idx][d_int] not in ["", "上課"]: return False
+                # 預休 / 長假 / 特殊假別 硬保護：雙重確認（即使 O 標記遺失，仍阻擋排班）
+                if (n_idx, d_int) in _preoff_set5: return False
+                # 上課日（非包班護理師）：不可排入任何班別，保持顯示「上課」
+                if sched[n_idx][d_int] == "上課" and cache_pref[n_idx] == "": return False
                 # 行政職稱（組長/護理長/副護理長）只能上白班
                 if cache_title[n_idx] in ADMIN_TITLES and s != "D": return False
                 # 護理長/副護理長/組長：行政班，完全不排假日班
@@ -3935,7 +4488,8 @@ if st.session_state.step >= 5:
                                     req = 0
                                 else:
                                     _wdf_match = edited_weekly_df[edited_weekly_df["星期"] == curr_w_day] if not edited_weekly_df.empty else pd.DataFrame()
-                                    req = int(_wdf_match.iloc[0][f"{target_skill}需求"]) if not _wdf_match.empty else 0
+                                    _req_val = _wdf_match.iloc[0][f"{target_skill}需求"] if not _wdf_match.empty else 0
+                                    req = 0 if (pd.isna(_req_val) or _req_val == "") else int(_req_val)
                             
                             curr = sum(1 for i in ai_df.index if sched[i][d] == "D"
                                        and cache_title[i] not in NO_HOL_ADMIN
