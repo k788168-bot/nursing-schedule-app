@@ -2720,6 +2720,8 @@ if st.session_state.step >= 3:
             st.session_state.night_sched = None
             st.session_state.d_sched = None
             st.session_state.final_sched = None
+            st.session_state._s4_night_ceiling = None
+            st.session_state._s4_night_elig = None
             st.rerun()
     edited_quota_df = st.session_state.edited_quota_df
     
@@ -2811,6 +2813,8 @@ if st.session_state.step >= 3:
 
                         def can_work_base(n_idx, s, d_int):
                             if sched[n_idx][d_int] not in ["", "上課"]: return False
+                            # 預休/長假/特殊假別硬保護：即使格子是空的也不可排入
+                            if (n_idx, d_int) in _preoff_set3: return False
                             # 上課日（非包班護理師）：不可排入任何班別（顯示為「上課」）
                             if sched[n_idx][d_int] == "上課" and cache_pref[n_idx] == "": return False
                             # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
@@ -3386,6 +3390,8 @@ if st.session_state.step >= 4:
             st.session_state.night_sched = None
             st.session_state.d_sched = None
             st.session_state.final_sched = None
+            st.session_state._s4_night_ceiling = None  # 清除快取，重排後重新計算
+            st.session_state._s4_night_elig = None
             st.rerun()
     edited_quota_df = st.session_state.edited_quota_df
     
@@ -3502,6 +3508,8 @@ if st.session_state.step >= 4:
 
                     def can_work_base(n_idx, s, d_int, strict_wow=True):
                         if sched[n_idx][d_int] not in ["", "上課"]: return False
+                        # 預休/長假/特殊假別硬保護：即使格子是空的也不可排入
+                        if (n_idx, d_int) in _preoff_set4: return False
                         # 上課日（非包班護理師）：不可排入任何班別
                         if sched[n_idx][d_int] == "上課" and cache_pref[n_idx] == "": return False
                         # 假日出勤能力限制（包班人員有假日出勤義務，不受此限）
@@ -4315,6 +4323,8 @@ if st.session_state.step >= 4:
             with col_btn_back:
                 if st.button("⬅️ 重新安插夜班", type="secondary"):
                     st.session_state.night_sched = None
+                    st.session_state._s4_night_ceiling = None
+                    st.session_state._s4_night_elig = None
                     st.rerun()
             with col_btn_go:
                 if st.button("✅ 確認夜班無誤，前往第五步（排滿白班）", type="primary"):
