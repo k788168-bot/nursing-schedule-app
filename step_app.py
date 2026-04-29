@@ -46,6 +46,8 @@ if "current_page" not in st.session_state:
 for key in ["base_sched", "pack_sched", "night_sched", "d_sched", "twelve_sched", "final_sched", "classified_sched", "ai_df", "custom_targets"]:
     if key not in st.session_state:
         st.session_state[key] = None
+if "auto_run" not in st.session_state:
+    st.session_state.auto_run = False
 
 # ── 存檔 / 載入進度 ─────────────────────────────────────────────────────────
 _CHECKPOINT_KEYS = [
@@ -1310,6 +1312,25 @@ def _show_homepage():
                 st.rerun()
 
     st.write("")
+    with st.container(border=True):
+        col_auto1, col_auto2 = st.columns([3, 1])
+        with col_auto1:
+            st.markdown("### ⚡ 一鍵全自動排班")
+            st.markdown("設定月份與上傳護師名單後，**系統自動完成步驟 3～7**，跳過所有中間確認，直接輸出完整班表")
+        with col_auto2:
+            st.write("")
+            st.write("")
+            if st.button("⚡ 立即使用", key="nav_auto_run", type="primary", use_container_width=True):
+                st.session_state.auto_run = True
+                st.session_state.current_page = "scheduling"
+                # 重置排班進度，從頭開始
+                for _k in ["base_sched", "pack_sched", "night_sched", "d_sched",
+                           "twelve_sched", "final_sched", "classified_sched"]:
+                    st.session_state[_k] = None
+                st.session_state.step = 1
+                st.rerun()
+
+    st.write("")
     if st.button("📖 使用說明 & 範例下載", use_container_width=True, key="nav_tutorial"):
         st.session_state.current_page = "tutorial"
         st.rerun()
@@ -2133,6 +2154,14 @@ elif st.session_state.current_page == "tutorial":
 
 _show_navbar("🗓️ 層級式護理輔助排班工作站", show_save_load=True)
 st.progress(min(st.session_state.step / 7, 1.0), text=f"目前進度：第 {st.session_state.step} 步 / 共 7 步")
+if st.session_state.get("auto_run"):
+    _col_ar1, _col_ar2 = st.columns([5, 1])
+    with _col_ar1:
+        st.info("⚡ **一鍵全自動排班模式**　｜　完成步驟 1～2 的設定後，系統將自動執行步驟 3～7，無需逐步確認")
+    with _col_ar2:
+        if st.button("❌ 取消自動模式", key="cancel_auto_run"):
+            st.session_state.auto_run = False
+            st.rerun()
 
 weekday_names_list = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
 
@@ -3214,6 +3243,11 @@ if st.session_state.step >= 3:
                         st.session_state.pack_sched = pack_df
                         st.rerun()
         else:
+            # 一鍵全自動排班：無包班人員時自動跳過
+            if st.session_state.get("auto_run"):
+                st.session_state.pack_sched = st.session_state.base_sched.copy()
+                st.session_state.step = 4
+                st.rerun()
             st.info("本月無包班人員，您可以直接進入下一步。")
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
@@ -3361,6 +3395,10 @@ if st.session_state.step >= 3:
             )
 
         if st.session_state.step == 3:
+            # 一鍵全自動排班：自動推進到步驟4
+            if st.session_state.get("auto_run"):
+                st.session_state.step = 4
+                st.rerun()
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
                 if st.button("⬅️ 回到第二步 (重調配額)", type="secondary"):
@@ -4319,6 +4357,10 @@ if st.session_state.step >= 4:
             st.warning("⚠️ 以上假日人力不足，建議至護理師名單調整『能上週六/週日/國定假日』欄位後重排。")
 
         if st.session_state.step == 4:
+            # 一鍵全自動排班：自動推進到步驟5
+            if st.session_state.get("auto_run"):
+                st.session_state.step = 5
+                st.rerun()
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
                 if st.button("⬅️ 重新安插夜班", type="secondary"):
@@ -5609,6 +5651,10 @@ if st.session_state.step >= 5:
         display_safety_radar(st.session_state.d_sched, edited_quota_df, ai_df)
 
         if st.session_state.step == 5:
+            # 一鍵全自動排班：自動推進到步驟6
+            if st.session_state.get("auto_run"):
+                st.session_state.step = 6
+                st.rerun()
             col_btn_back, col_btn_go = st.columns([1, 4])
             with col_btn_back:
                 if st.button("⬅️ 退回重排白班", type="secondary"):
@@ -6449,6 +6495,11 @@ if st.session_state.step >= 6:
             st.dataframe(violation_df, use_container_width=True)
 
         st.write("---")
+        # 一鍵全自動排班：自動推進到步驟7
+        if st.session_state.get("auto_run"):
+            st.session_state.step = 7
+            st.session_state.classified_sched = None
+            st.rerun()
         col_btn_back, col_btn_download, col_btn_go7, col_btn_reset = st.columns([1, 2, 2, 1])
         with col_btn_back:
             if st.button("⬅️ 退回重排12-8與加班線", type="secondary"):
@@ -6663,6 +6714,10 @@ if st.session_state.step >= 7:
         )
 
         st.write("---")
+        # 一鍵全自動排班：全部完成，關閉 auto_run 並顯示完成提示
+        if st.session_state.get("auto_run"):
+            st.session_state.auto_run = False
+            st.success("🎉 **一鍵全自動排班完成！** 步驟 3～7 全部執行完畢，請下載班表。")
         col7_back, col7_dl, col7_reset = st.columns([1, 3, 1])
         with col7_back:
             if st.button("⬅️ 退回重新分類", type="secondary"):
